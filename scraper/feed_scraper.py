@@ -1,6 +1,30 @@
 """
 RSS Feed Scraper — fetches articles from all configured RSS feeds in parallel.
+Includes SSL certificate fix for macOS.
 """
+
+import os
+import ssl
+import urllib.request
+
+# ─── SSL Certificate Fix ─────────────────────────────────
+# macOS Python often doesn't trust system CA certs.
+# Use certifi's CA bundle if available, otherwise disable verification as fallback.
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("SSL_CERT_DIR", os.path.dirname(certifi.where()))
+    _ssl_context = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    # certifi not available — create unverified context as last resort
+    _ssl_context = ssl.create_default_context()
+    _ssl_context.check_hostname = False
+    _ssl_context.verify_mode = ssl.CERT_NONE
+
+# Install a URL opener that uses our SSL context globally
+_https_handler = urllib.request.HTTPSHandler(context=_ssl_context)
+_opener = urllib.request.build_opener(_https_handler)
+urllib.request.install_opener(_opener)
 
 import feedparser
 from datetime import datetime, timezone, timedelta

@@ -11,11 +11,14 @@ from utils.logger import log
 
 # Try newspaper3k first, fall back to BeautifulSoup
 try:
-    from newspaper import Article as NewspaperArticle
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
+        from newspaper import Article as NewspaperArticle
     HAS_NEWSPAPER = True
-except ImportError:
+except (ImportError, Exception):
     HAS_NEWSPAPER = False
-    log.warning("newspaper3k not available, using BeautifulSoup fallback")
+    log.info("Using BeautifulSoup for article extraction (newspaper3k unavailable)")
 
 from bs4 import BeautifulSoup
 
