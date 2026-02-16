@@ -16,6 +16,20 @@ else
     exit 1
 fi
 
+# Check .env permissions (Google Drive sync lock workaround)
+if [ -f ".env" ]; then
+    if ! [ -r ".env" ]; then
+        echo "⚠️  WARNING: .env file exists but is not readable (Google Drive sync lock?)"
+        echo "   Try: xattr -d com.apple.quarantine .env"
+        echo "   Or export HF_TOKEN manually."
+    else
+        # Try to export vars to help python finding them if load_dotenv fails
+        set -a
+        source .env 2>/dev/null
+        set +a
+    fi
+fi
+
 echo "🔮 Lens AI — AI News Video Factory"
 echo "=================================="
 echo "Python: $(python3 --version)"

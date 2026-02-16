@@ -20,6 +20,7 @@ Pillow>=10.0.0
 
 # Audio processing
 pydub>=0.25.1
+gTTS>=2.5.1
 
 # Config & scheduling
 python-dotenv>=1.0.0

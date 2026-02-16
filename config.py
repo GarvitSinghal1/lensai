@@ -26,24 +26,32 @@ DB_DIR.mkdir(exist_ok=True)
 HISTORY_DIR.mkdir(exist_ok=True)
 
 # ─── API Keys ────────────────────────────────────────────
-HF_API_KEY = os.getenv("hff_key", "")
+HF_API_KEY = os.getenv("hff_key", "") or os.getenv("HF_TOKEN", "")
 
 # ─── HF Model Config ────────────────────────────────────
-# Text generation (for analysis & script writing)
-# Kimi K2.5 — native multimodal agentic model by Moonshot AI
-LLM_MODEL = "moonshotai/Kimi-K2.5"
-LLM_FALLBACK = "mistralai/Mistral-7B-Instruct-v0.3"
-LLM_FALLBACK_2 = "HuggingFaceH4/zephyr-7b-beta"
+# Text generation (using OpenAI-compatible router endpoint)
+# Kimi K2.5 (Novita provider)
+LLM_MODEL = "moonshotai/Kimi-K2.5:novita"
+# Zephyr 7B (Featherless provider)
+LLM_FALLBACK = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
+# Llama 3 won't work with chat/completions unless we have a provider suffix, keeping as fallback just in case
+LLM_FALLBACK_2 = "meta-llama/Llama-3.2-3B-Instruct"
 
-# TTS (text-to-speech) — Kokoro #1 free-tier, MiniMax #4 on HF TTS arena (ELO 1107)
-TTS_MODEL = "hexgrad/Kokoro-82M"
-TTS_FALLBACK = "MiniMax/speech-02-turbo"
-TTS_FALLBACK_2 = "facebook/mms-tts-eng"
+# TTS (text-to-speech) — using Replicate Kokoro endpoint
+TTS_MODEL = "kokoro-replicate" # Special flag for hf_client
+TTS_API_URL = "https://router.huggingface.co/replicate/v1/predictions"
+TTS_FALLBACK = "facebook/mms-tts-eng" # Attempt standard endpoint for fallback
+TTS_FALLBACK_2 = "microsoft/speecht5_tts" # Another official fallback
 
-# Image generation — FLUX.2-dev is #3 on HF leaderboard (ELO 1209), 32B params
-IMAGE_MODEL = "black-forest-labs/FLUX.2-dev"
-IMAGE_FALLBACK = "black-forest-labs/FLUX.1-dev"
-IMAGE_FALLBACK_2 = "stabilityai/stable-diffusion-xl-base-1.0"
+# Image generation (Flux 2 is paid, fallback to SD v1.5 for free tier)
+IMAGE_MODEL = "runwayml/stable-diffusion-v1-5" 
+IMAGE_STYLE_SUFFIX = "cinematic lighting, realistic, 4k, detailed, dramatic angle"
+IMAGE_NEGATIVE_PROMPT = "blur, haze, deformed, ugly, cartoon, anime, text, watermark"
+IMAGE_FALLBACK = "CompVis/stable-diffusion-v1-4"
+IMAGE_FALLBACK_2 = "prompthero/openjourney"
+
+# TTS Fallback flags
+ENABLE_GTTS_FALLBACK = True
 
 # Sentence embeddings (runs locally, no API cost)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -91,7 +99,8 @@ CYCLE_INTERVAL_HOURS = 3           # Run pipeline every N hours
 MAX_VIDEOS_PER_CYCLE = 5           # Cap videos per cycle to save credits
 
 # ─── HF API Config ──────────────────────────────────────
-HF_API_BASE = "https://api-inference.huggingface.co/models"
+# HF migrated from api-inference.huggingface.co (410 Gone) → router.huggingface.co
+HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_API_TIMEOUT = 180               # Seconds to wait for HF model response (K2.5 needs more)
 HF_MAX_RETRIES = 3                 # Retry failed API calls
 

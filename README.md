@@ -123,11 +123,20 @@ git clone https://github.com/GarvitSinghal1/lensai.git
 cd lensai
 ```
 
-Create a `.env` file with your Hugging Face API key:
+### 3. Configure Environment
 
-```env
-hff_key=hf_your_api_key_here
+Create a `.env` file in the project root:
+
+```bash
+# Hugging Face API Key (Required)
+# Get one at: https://huggingface.co/settings/tokens
+HF_TOKEN=hf_your_token_here
+# Legacy key support also works:
+# hff_key=hf_your_token_here
 ```
+
+> **Troubleshooting:** If you get permission errors on MacOS/Google Drive, run:  
+> `xattr -d com.apple.quarantine .env`
 
 > 💡 Get a free API key at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
 

@@ -20,64 +20,7 @@ GEN_WIDTH = 576
 GEN_HEIGHT = 1024
 
 
-def _call_hf_image(prompt: str, model: str) -> Optional[bytes]:
-    """Call HF Inference API for image generation. Returns raw image bytes."""
-    headers = {"Authorization": f"Bearer {config.HF_API_KEY}"}
-    url = f"{config.HF_API_BASE}/{model}"
-    
-    # Enhance prompt for better quality using config-based style suffix
-    enhanced_prompt = f"{prompt}. {config.IMAGE_STYLE_SUFFIX}"
-    
-    payload = {
-        "inputs": enhanced_prompt,
-        "parameters": {
-            "width": GEN_WIDTH,
-            "height": GEN_HEIGHT,
-            "negative_prompt": config.IMAGE_NEGATIVE_PROMPT,
-        },
-    }
-    
-    for attempt in range(config.HF_MAX_RETRIES):
-        try:
-            resp = requests.post(
-                url, headers=headers, json=payload,
-                timeout=config.HF_API_TIMEOUT * 2  # Image gen can take longer
-            )
-            
-            if resp.status_code == 503:
-                wait_time = 30
-                try:
-                    wait_time = resp.json().get("estimated_time", 30)
-                except Exception:
-                    pass
-                log.warning(f"Image model {model} loading, waiting {wait_time:.0f}s...")
-                time.sleep(min(wait_time, 120))
-                continue
-            
-            if resp.status_code == 500:
-                log.warning(f"Image gen server error (attempt {attempt + 1})")
-                time.sleep(5)
-                continue
-            
-            resp.raise_for_status()
-            
-            content_type = resp.headers.get("content-type", "")
-            if "image" in content_type or len(resp.content) > 5000:
-                return resp.content
-            
-            log.warning(f"Image gen returned non-image content: {content_type}")
-            return None
-            
-        except requests.exceptions.Timeout:
-            log.warning(f"Image gen timeout (attempt {attempt + 1})")
-            continue
-        except Exception as e:
-            log.warning(f"Image gen error with {model}: {e}")
-            if attempt < config.HF_MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
-            continue
-    
-    return None
+
 
 
 def _save_and_resize_image(image_bytes: bytes, output_path: Path) -> bool:
@@ -115,26 +58,40 @@ def _generate_solid_fallback(output_path: Path, text: str = "") -> bool:
     try:
         from PIL import ImageDraw, ImageFont
         
-        # Dark gradient-like background
-        img = Image.new("RGB", (config.VIDEO_WIDTH, config.VIDEO_HEIGHT), (15, 15, 25))
+        # Brighter blue/purple gradient background
+        img = Image.new("RGB", (config.VIDEO_WIDTH, config.VIDEO_HEIGHT), (20, 20, 40))
         draw = ImageDraw.Draw(img)
         
-        # Add subtle gradient effect
+        # Add gradient effect (Dark Blue -> Lighter Blue/Purple)
         for y in range(config.VIDEO_HEIGHT):
-            r = int(15 + (25 * y / config.VIDEO_HEIGHT))
-            g = int(15 + (15 * y / config.VIDEO_HEIGHT))
-            b = int(25 + (35 * y / config.VIDEO_HEIGHT))
+            r = int(20 + (40 * y / config.VIDEO_HEIGHT))
+            g = int(20 + (20 * y / config.VIDEO_HEIGHT))
+            b = int(60 + (80 * y / config.VIDEO_HEIGHT))
             draw.line([(0, y), (config.VIDEO_WIDTH, y)], fill=(r, g, b))
+        
+        # Add explicit "IMAGE GENERATION FAILED" warning
+        draw.text((50, 50), "AI IMAGE GEN FAILED", fill=(255, 100, 100))
         
         # Add text if provided
         if text:
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-            except (OSError, IOError):
+            font = None
+            # Try common Mac/Linux fonts
+            font_paths = [
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+            ]
+            
+            for path in font_paths:
                 try:
-                    font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
+                    font = ImageFont.truetype(path, 40)
+                    break
                 except (OSError, IOError):
-                    font = ImageFont.load_default()
+                    continue
+            
+            if not font:
+                font = ImageFont.load_default()
             
             # Word wrap
             words = text.split()
@@ -142,8 +99,14 @@ def _generate_solid_fallback(output_path: Path, text: str = "") -> bool:
             current_line = ""
             for word in words:
                 test = f"{current_line} {word}".strip()
-                bbox = draw.textbbox((0, 0), test, font=font)
-                if bbox[2] < config.VIDEO_WIDTH - 100:
+                # Check width (handling default font lacking getbbox in older Pillow)
+                try:
+                    bbox = draw.textbbox((0, 0), test, font=font)
+                    width = bbox[2]
+                except AttributeError:
+                    width = len(test) * 10 # Rough estimate for default font
+                    
+                if width < config.VIDEO_WIDTH - 60:
                     current_line = test
                 else:
                     if current_line:
@@ -152,11 +115,20 @@ def _generate_solid_fallback(output_path: Path, text: str = "") -> bool:
             if current_line:
                 lines.append(current_line)
             
-            y_start = config.VIDEO_HEIGHT // 2 - (len(lines) * 45) // 2
-            for i, line in enumerate(lines[:5]):
-                bbox = draw.textbbox((0, 0), line, font=font)
-                x = (config.VIDEO_WIDTH - bbox[2]) // 2
-                draw.text((x, y_start + i * 45), line, fill=(200, 200, 220), font=font)
+            # Draw lines centered
+            line_height = 50
+            total_height = len(lines) * line_height
+            y_start = (config.VIDEO_HEIGHT - total_height) // 2
+            
+            for i, line in enumerate(lines[:10]): # Limit lines
+                try:
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    text_width = bbox[2]
+                except AttributeError:
+                    text_width = len(line) * 10
+                    
+                x = (config.VIDEO_WIDTH - text_width) // 2
+                draw.text((x, y_start + i * line_height), line, fill=(255, 255, 255), font=font)
         
         img.save(output_path, "PNG")
         return True
@@ -179,25 +151,16 @@ def generate_image(prompt: str, output_path: Path) -> Optional[str]:
     log.info(f"Generating image: \"{prompt[:70]}...\"")
     output_path = Path(output_path).with_suffix('.png')
     
-    # Try primary model
-    image_bytes = _call_hf_image(prompt, config.IMAGE_MODEL)
-    
-    # Try fallback 1
-    if not image_bytes:
-        log.warning(f"Primary image model ({config.IMAGE_MODEL}) failed, trying fallback...")
-        image_bytes = _call_hf_image(prompt, config.IMAGE_FALLBACK)
-    
-    # Try fallback 2
-    if not image_bytes:
-        log.warning(f"Fallback image model ({config.IMAGE_FALLBACK}) also failed, trying fallback 2...")
-        image_bytes = _call_hf_image(prompt, config.IMAGE_FALLBACK_2)
+    # Use centralized HF client (handles Replicate Flux 2, Flux 1, SDXL fallbacks)
+    from utils import hf_client
+    image_bytes = hf_client.generate_image(prompt)
     
     if image_bytes:
         if _save_and_resize_image(image_bytes, output_path):
             log.info(f"Image generated: {output_path.name}")
             return str(output_path)
     
-    # Use fallback solid image
+    # Use fallback solid image if all API methods fail
     log.warning("All image models failed, using fallback image")
     if _generate_solid_fallback(output_path, prompt[:100]):
         return str(output_path)

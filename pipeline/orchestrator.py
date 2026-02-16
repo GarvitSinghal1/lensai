@@ -90,6 +90,15 @@ def run_cycle() -> dict:
         return stats
     
     log.info(f"Found {len(clusters)} multi-source topics")
+    
+    # Generate interactive visualization
+    try:
+        from clustering import visualizer
+        viz_path = config.OUTPUT_DIR / "clusters.html"
+        visualizer.save_interactive_visualization(clusters, viz_path)
+    except Exception as e:
+        log.warning(f"Visualization failed: {e}")
+
     for i, cluster in enumerate(clusters[:10]):
         log.info(f"  [{i+1}] {cluster['representative_title'][:80]} "
                  f"({cluster['article_count']} articles from {cluster['source_names'][:50]})")

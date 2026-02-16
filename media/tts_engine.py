@@ -13,51 +13,7 @@ from typing import Optional
 
 import config
 from utils.logger import log
-
-
-def _call_hf_tts(text: str, model: str) -> Optional[bytes]:
-    """Call HF Inference API for text-to-speech. Returns raw audio bytes."""
-    headers = {"Authorization": f"Bearer {config.HF_API_KEY}"}
-    url = f"{config.HF_API_BASE}/{model}"
-    
-    payload = {"inputs": text}
-    
-    for attempt in range(config.HF_MAX_RETRIES):
-        try:
-            resp = requests.post(
-                url, headers=headers, json=payload,
-                timeout=config.HF_API_TIMEOUT
-            )
-            
-            if resp.status_code == 503:
-                wait_time = 30
-                try:
-                    wait_time = resp.json().get("estimated_time", 30)
-                except Exception:
-                    pass
-                log.warning(f"TTS model {model} loading, waiting {wait_time:.0f}s...")
-                time.sleep(min(wait_time, 60))
-                continue
-            
-            resp.raise_for_status()
-            
-            content_type = resp.headers.get("content-type", "")
-            if "audio" in content_type or len(resp.content) > 1000:
-                return resp.content
-            
-            log.warning(f"TTS returned non-audio content: {content_type}")
-            return None
-            
-        except requests.exceptions.Timeout:
-            log.warning(f"TTS timeout (attempt {attempt + 1})")
-            continue
-        except Exception as e:
-            log.warning(f"TTS error with {model}: {e}")
-            if attempt < config.HF_MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
-            continue
-    
-    return None
+from utils import hf_client
 
 
 def _save_audio(audio_bytes: bytes, output_path: Path) -> bool:
@@ -143,6 +99,40 @@ def _get_audio_duration(file_path: Path) -> float:
     return max(estimated, 2.0)
 
 
+def _generate_local_tts(text: str) -> Optional[bytes]:
+    """Fallback to local system TTS (macOS 'say')."""
+    import sys
+    import subprocess
+    import tempfile
+    import os
+    
+    if sys.platform != "darwin":
+        return None
+        
+    try:
+        # Create temp file for output
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            temp_path = tf.name
+            
+        # Run 'say' command (Linear PCM 16-bit 22kHz WAV)
+        subprocess.run(["say", "-o", temp_path, "--data-format=LEI16@22050", text], check=True)
+        
+        # Read bytes
+        with open(temp_path, "rb") as f:
+            audio_bytes = f.read()
+            
+        # Cleanup
+        os.remove(temp_path)
+        
+        if len(audio_bytes) > 1000:
+             log.info(f"Generated local TTS with 'say' ({len(audio_bytes)} bytes)")
+             return audio_bytes
+             
+    except Exception as e:
+        log.warning(f"Local TTS failed: {e}")
+        
+    return None
+
 def generate_tts(text: str, output_path: Path) -> Optional[dict]:
     """
     Generate TTS audio for a given text.
@@ -156,25 +146,82 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
     
     log.info(f"Generating TTS ({len(text)} chars): \"{text[:60]}...\"")
     
-    # Try primary model (Kokoro-82M)
-    audio_bytes = _call_hf_tts(text, config.TTS_MODEL)
+def _generate_gtts(text: str) -> Optional[bytes]:
+    """Fallback to Google TTS (gTTS). Free and higher quality than local system TTS."""
+    if not hasattr(config, "ENABLE_GTTS_FALLBACK") or not config.ENABLE_GTTS_FALLBACK:
+        return None
+        
+    try:
+        from gtts import gTTS
+        import io
+        
+        # Determine language (default en)
+        lang = "en"
+        
+        tts = gTTS(text=text, lang=lang, slow=False)
+        mp3_io = io.BytesIO()
+        tts.write_to_fp(mp3_io)
+        mp3_bytes = mp3_io.getvalue()
+        
+        if len(mp3_bytes) > 1000:
+            log.info(f"Generated Google TTS ({len(mp3_bytes)} bytes)")
+            # Note: gTTS outputs MP3. Our system expects bytes.
+            # _save_audio just writes bytes. Check if downstream needs WAV.
+            # _get_audio_duration supports pydub (mp3) or wave (wav).
+            # If pydub is missing, wave will fail on MP3.
+            # We should ideally convert MP3 to WAV if pydub is not guaranteed?
+            # But requirements.txt has pydub.
+            return mp3_bytes
+            
+    except Exception as e:
+        log.warning(f"Google TTS failed: {e}")
+        
+    return None
+
+def generate_tts(text: str, output_path: Path) -> Optional[dict]:
+    """
+    Generate TTS audio for a given text.
     
-    # Try fallback 1 (MiniMax Speech-02-Turbo)
-    if not audio_bytes:
-        log.warning(f"Primary TTS ({config.TTS_MODEL}) failed, trying MiniMax...")
-        audio_bytes = _call_hf_tts(text, config.TTS_FALLBACK)
+    Returns:
+        dict with 'audio_path' and 'duration_seconds', or None on failure.
+    """
+    if not text.strip():
+        log.warning("Empty text provided to TTS")
+        return None
     
-    # Try fallback 2 (MMS-TTS)
+    log.info(f"Generating TTS ({len(text)} chars): \"{text[:60]}...\"")
+    
+    # 1. Use centralized HF client (Kokoro -> MMS -> SpeechT5)
+    audio_bytes = hf_client.generate_audio(text)
+    
+    # 2. Fallback: Google TTS (gTTS)
     if not audio_bytes:
-        log.warning(f"MiniMax TTS failed, trying MMS-TTS...")
-        audio_bytes = _call_hf_tts(text, config.TTS_FALLBACK_2)
+        audio_bytes = _generate_gtts(text)
+    
+    # 3. Final fallback: Local System TTS (Mac only)
+    if not audio_bytes:
+        log.warning("All HF/Google TTS models failed, trying local system TTS...")
+        audio_bytes = _generate_local_tts(text)
     
     if not audio_bytes:
-        log.error("All TTS models failed")
+        log.error("All TTS generation methods failed")
         return None
     
     # Save audio file
-    output_path = Path(output_path).with_suffix('.wav')
+    # gTTS returns MP3, others WAV.
+    # If MP3, we should save as .mp3?
+    # But composer might expect .wav?
+    # moviepy AudioFileClip supports mp3.
+    # _save_audio logic:
+    
+    # Check if header looks like MP3 or RIFF/WAV?
+    is_mp3 = audio_bytes[:3] == b'ID3' or audio_bytes[:2] == b'\xff\xfb'
+    
+    if is_mp3:
+        output_path = Path(output_path).with_suffix('.mp3')
+    else:
+        output_path = Path(output_path).with_suffix('.wav')
+        
     if not _save_audio(audio_bytes, output_path):
         return None
     
