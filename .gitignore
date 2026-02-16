@@ -32,3 +32,6 @@ repo/
 
 # Misc
 *.log
+
+# Pip target install directory
+lib/
