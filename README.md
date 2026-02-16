@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/LLM-Kimi_K2.5-purple?style=flat-square" alt="Kimi K2.5">
-  <img src="https://img.shields.io/badge/Images-FLUX.1--dev-orange?style=flat-square" alt="FLUX.1">
+  <img src="https://img.shields.io/badge/Images-FLUX.2--dev_(ELO_1209)-orange?style=flat-square" alt="FLUX.2">
   <img src="https://img.shields.io/badge/TTS-Kokoro--82M-green?style=flat-square" alt="Kokoro TTS">
   <img src="https://img.shields.io/badge/Video-MoviePy_v2-red?style=flat-square" alt="MoviePy">
   <img src="https://img.shields.io/badge/Cost-Free_(HF_API)-brightgreen?style=flat-square" alt="Free">
@@ -26,7 +26,7 @@ Lens AI is a **zero-human-intervention** pipeline that automatically:
 3. **Cross-references** multiple sources with a Kimi K2.5–powered investigative AI — identifying consensus facts, disputed claims, and exaggerations
 4. **Writes scripts** in punchy 30–45 second short-form format (hook → context → facts → twist → kicker)
 5. **Generates voiceover** using Kokoro-82M TTS with word-level timestamps
-6. **Creates cinematic visuals** for each scene via FLUX.1-dev (photorealistic, 9:16, no text/logos)
+6. **Creates cinematic visuals** for each scene via FLUX.2-dev — #3 on HF image leaderboard (ELO 1209)
 7. **Assembles final videos** with Ken Burns zoom, word-by-word captions, and crossfade transitions
 8. **Detects developing stories** and auto-generates follow-up videos with historical context
 
@@ -55,7 +55,7 @@ All of this runs on the **free** Hugging Face Inference API.
 │      ↓                                                      │
 │   🎙️  TTS Voiceover (Kokoro-82M → MMS-TTS)                 │
 │      ↓                                                      │
-│   🎨 Image Generation (FLUX.1-dev → SDXL → FLUX.1-schnell) │
+│   🎨 Image Generation (FLUX.2-dev → FLUX.1-dev → SDXL)     │
 │      ↓                                                      │
 │   🎬 Video Assembly (MoviePy v2, 1080×1920, 30fps)          │
 │      ↓                                                      │
@@ -154,8 +154,8 @@ pip install --no-compile --target lib -r requirements.txt
 | Component | Primary Model | Fallback 1 | Fallback 2 |
 |-----------|--------------|-------------|------------|
 | **Analysis & Scripts** | Kimi K2.5 (`moonshotai/Kimi-K2.5`) | Mistral 7B Instruct | Zephyr 7B Beta |
-| **Image Generation** | FLUX.1-dev (`black-forest-labs/FLUX.1-dev`) | SDXL Base 1.0 | FLUX.1-schnell |
-| **Text-to-Speech** | Kokoro 82M (`hexgrad/Kokoro-82M`) | MMS-TTS English | — |
+| **Image Generation** | FLUX.2-dev · *ELO 1209* | FLUX.1-dev | SDXL Base 1.0 |
+| **Text-to-Speech** | Kokoro 82M · *7.4M downloads* | MiniMax Speech-02-Turbo · *ELO 1107* | MMS-TTS English |
 | **Embeddings** | all-MiniLM-L6-v2 (local) | — | — |
 
 Every API call has a **3-model fallback chain** — if the primary model is loading or rate-limited, it silently tries the next one.

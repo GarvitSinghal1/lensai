@@ -1,6 +1,6 @@
 """
 Image Generator v2 — creates AI-generated visuals for each video scene
-using HF Inference API (FLUX.1-dev / SDXL / FLUX.1-schnell).
+using HF Inference API. Fallback chain: FLUX.2-dev → FLUX.1-dev → SDXL.
 Enhanced with cinematic style guidelines and negative prompt support.
 """
 

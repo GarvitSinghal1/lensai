@@ -35,14 +35,15 @@ LLM_MODEL = "moonshotai/Kimi-K2.5"
 LLM_FALLBACK = "mistralai/Mistral-7B-Instruct-v0.3"
 LLM_FALLBACK_2 = "HuggingFaceH4/zephyr-7b-beta"
 
-# TTS (text-to-speech)
+# TTS (text-to-speech) — Kokoro #1 free-tier, MiniMax #4 on HF TTS arena (ELO 1107)
 TTS_MODEL = "hexgrad/Kokoro-82M"
-TTS_FALLBACK = "facebook/mms-tts-eng"
+TTS_FALLBACK = "MiniMax/speech-02-turbo"
+TTS_FALLBACK_2 = "facebook/mms-tts-eng"
 
-# Image generation
-IMAGE_MODEL = "black-forest-labs/FLUX.1-dev"
-IMAGE_FALLBACK = "stabilityai/stable-diffusion-xl-base-1.0"
-IMAGE_FALLBACK_2 = "black-forest-labs/FLUX.1-schnell"
+# Image generation — FLUX.2-dev is #3 on HF leaderboard (ELO 1209), 32B params
+IMAGE_MODEL = "black-forest-labs/FLUX.2-dev"
+IMAGE_FALLBACK = "black-forest-labs/FLUX.1-dev"
+IMAGE_FALLBACK_2 = "stabilityai/stable-diffusion-xl-base-1.0"
 
 # Sentence embeddings (runs locally, no API cost)
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -99,7 +100,8 @@ HF_MAX_RETRIES = 3                 # Retry failed API calls
 IMAGE_STYLE_SUFFIX = (
     "Photorealistic, cinematic lighting, dramatic composition, "
     "ultra-detailed, 4K quality, professional news photography style, "
-    "moody color grading, shallow depth of field, editorial quality"
+    "moody color grading, shallow depth of field, editorial quality, "
+    "grounded generation, accurate spatial relationships"
 )
 IMAGE_NEGATIVE_PROMPT = (
     "cartoon, anime, illustration, drawing, sketch, painting, "

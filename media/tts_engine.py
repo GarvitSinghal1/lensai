@@ -1,6 +1,6 @@
 """
 TTS Engine — generates voiceover audio using HF Inference API.
-Uses Kokoro-82M as primary, MMS-TTS as fallback.
+Fallback chain: Kokoro-82M → MiniMax Speech-02-Turbo → MMS-TTS
 """
 
 import io
@@ -156,13 +156,18 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
     
     log.info(f"Generating TTS ({len(text)} chars): \"{text[:60]}...\"")
     
-    # Try primary model
+    # Try primary model (Kokoro-82M)
     audio_bytes = _call_hf_tts(text, config.TTS_MODEL)
     
-    # Try fallback
+    # Try fallback 1 (MiniMax Speech-02-Turbo)
     if not audio_bytes:
-        log.warning(f"Primary TTS ({config.TTS_MODEL}) failed, trying fallback...")
+        log.warning(f"Primary TTS ({config.TTS_MODEL}) failed, trying MiniMax...")
         audio_bytes = _call_hf_tts(text, config.TTS_FALLBACK)
+    
+    # Try fallback 2 (MMS-TTS)
+    if not audio_bytes:
+        log.warning(f"MiniMax TTS failed, trying MMS-TTS...")
+        audio_bytes = _call_hf_tts(text, config.TTS_FALLBACK_2)
     
     if not audio_bytes:
         log.error("All TTS models failed")
