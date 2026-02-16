@@ -1,11 +1,20 @@
 #!/bin/bash
 # Lens AI — Run Script
-# Handles PYTHONPATH for local lib/ dependencies installed via pip --target
+# Activates the project venv and runs main.py
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="${SCRIPT_DIR}/.venv"
 
 export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH="${SCRIPT_DIR}/lib:${PYTHONPATH}"
+
+# Activate virtual environment
+if [ -d "${VENV_DIR}" ]; then
+    source "${VENV_DIR}/bin/activate"
+else
+    echo "❌ Virtual environment not found at ${VENV_DIR}"
+    echo "   Create it with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    exit 1
+fi
 
 echo "🔮 Lens AI — AI News Video Factory"
 echo "=================================="
