@@ -1,6 +1,7 @@
 """
-Image Generator — creates AI-generated visuals for each video scene
-using HF Inference API (SDXL / FLUX).
+Image Generator v2 — creates AI-generated visuals for each video scene
+using HF Inference API (FLUX.1-dev / SDXL / FLUX.1-schnell).
+Enhanced with cinematic style guidelines and negative prompt support.
 """
 
 import io
@@ -24,18 +25,15 @@ def _call_hf_image(prompt: str, model: str) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {config.HF_API_KEY}"}
     url = f"{config.HF_API_BASE}/{model}"
     
-    # Enhance prompt for better quality
-    enhanced_prompt = (
-        f"{prompt}. "
-        "Ultra high quality, photorealistic, 4K, cinematic lighting, "
-        "professional photography, detailed, sharp focus"
-    )
+    # Enhance prompt for better quality using config-based style suffix
+    enhanced_prompt = f"{prompt}. {config.IMAGE_STYLE_SUFFIX}"
     
     payload = {
         "inputs": enhanced_prompt,
         "parameters": {
             "width": GEN_WIDTH,
             "height": GEN_HEIGHT,
+            "negative_prompt": config.IMAGE_NEGATIVE_PROMPT,
         },
     }
     
@@ -184,10 +182,15 @@ def generate_image(prompt: str, output_path: Path) -> Optional[str]:
     # Try primary model
     image_bytes = _call_hf_image(prompt, config.IMAGE_MODEL)
     
-    # Try fallback
+    # Try fallback 1
     if not image_bytes:
         log.warning(f"Primary image model ({config.IMAGE_MODEL}) failed, trying fallback...")
         image_bytes = _call_hf_image(prompt, config.IMAGE_FALLBACK)
+    
+    # Try fallback 2
+    if not image_bytes:
+        log.warning(f"Fallback image model ({config.IMAGE_FALLBACK}) also failed, trying fallback 2...")
+        image_bytes = _call_hf_image(prompt, config.IMAGE_FALLBACK_2)
     
     if image_bytes:
         if _save_and_resize_image(image_bytes, output_path):

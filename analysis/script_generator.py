@@ -1,213 +1,293 @@
 """
-Script Generator — creates punchy 30-45 second narration scripts for short-form video.
-Optimized for short attention spans with hook → facts → kicker structure.
+Script Generator v2 — uses Kimi K2.5 (with fallbacks) to generate
+punchy short-form video scripts. Supports both fresh and follow-up videos.
 """
 
 import json
-import time
-import requests
+import re
 from typing import Optional
 
 import config
 from utils.logger import log
+from utils.hf_client import call_hf_llm
 
 
-def _call_hf_llm(prompt: str, max_tokens: int = 1500) -> Optional[str]:
-    """Call HF Inference API for text generation."""
-    headers = {"Authorization": f"Bearer {config.HF_API_KEY}"}
-    
-    models = [config.LLM_MODEL, config.LLM_FALLBACK]
-    
-    for model in models:
-        url = f"{config.HF_API_BASE}/{model}"
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": max_tokens,
-                "temperature": 0.7,  # Slightly creative for engaging scripts
-                "return_full_text": False,
-            },
-        }
-        
-        for attempt in range(config.HF_MAX_RETRIES):
-            try:
-                resp = requests.post(
-                    url, headers=headers, json=payload,
-                    timeout=config.HF_API_TIMEOUT
-                )
-                
-                if resp.status_code == 503:
-                    wait_time = resp.json().get("estimated_time", 30)
-                    log.warning(f"Model {model} loading, waiting {wait_time:.0f}s...")
-                    time.sleep(min(wait_time, 60))
-                    continue
-                
-                resp.raise_for_status()
-                result = resp.json()
-                
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("generated_text", "").strip()
-                return str(result).strip()
-                
-            except requests.exceptions.Timeout:
-                log.warning(f"Timeout on {model} (attempt {attempt + 1})")
-                continue
-            except Exception as e:
-                log.warning(f"Error with {model}: {e}")
-                if attempt < config.HF_MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
-                continue
-    
-    log.error("All LLM models failed for script generation")
-    return None
+# ─── System Prompts ────────────────────────────────────────
+
+SYSTEM_PROMPT_FRESH = """You are Lens AI, a viral short-form news video scripter. You write scripts for 30-45 second vertical videos (YouTube Shorts / Instagram Reels). Your scripts must be:
+
+STYLE RULES:
+- Open with a HOOK that stops the scroll (question, shocking stat, bold claim)
+- Every sentence must earn its place — no filler, no fluff
+- Use conversational, slightly dramatic tone (like you're telling a friend something wild)
+- End with a KICKER that makes viewers want to share or comment
+- NO hashtags, NO "like and subscribe", NO emojis in the narration text
+- Write for SPOKEN delivery — short sentences, natural pauses
+- Each scene = 5-10 seconds of narration MAXIMUM
+
+IMAGE PROMPT RULES:
+- Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
+- Describe visual composition, lighting, mood, colors specifically
+- NEVER include text, words, logos, or watermarks in image prompts
+- Focus on symbolic/metaphorical visuals when showing people could be inaccurate
+- Always specify "photorealistic, 9:16 vertical format, cinematic" in prompts"""
+
+SYSTEM_PROMPT_FOLLOWUP = """You are Lens AI, a viral short-form news video scripter creating a FOLLOW-UP video on a developing story. Viewers may have seen the original coverage.
+
+FOLLOW-UP RULES:
+- Open with "Remember [brief recap]? Here's what just happened..."
+- Highlight what CHANGED since the last video
+- Compare new info vs what was previously known
+- If the story evolved, explain the twist
+- End with forward-looking speculation or what to watch for next
+- Keep it under 45 seconds — viewers know the backstory
+- Reference the original facts briefly but don't repeat the whole story
+
+IMAGE PROMPT RULES:
+- Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
+- For follow-ups, use visual cues suggesting "update" or "progression" (e.g., timelines, split screens conceptually)
+- NEVER include text, words, logos, or watermarks in image prompts
+- Always specify "photorealistic, 9:16 vertical format, cinematic" in prompts"""
 
 
-def generate_script(analysis: dict) -> Optional[list[dict]]:
-    """
-    Generate a punchy video narration script from the cross-reference analysis.
-    
-    Returns a list of scene dicts:
-      [
-        {
-          "scene_type": "hook" | "context" | "facts" | "twist" | "kicker",
-          "narration": "The spoken text for this scene",
-          "image_prompt": "Detailed prompt for AI image generation",
-          "estimated_duration": 5.0  # seconds
-        },
-        ...
-      ]
-    """
-    topic_summary = analysis.get("topic_summary", "")
-    consensus = analysis.get("consensus_facts", [])
+def _build_script_prompt(analysis: dict) -> str:
+    """Build the script generation prompt from analysis results."""
+    topic = analysis.get("topic_summary", "Breaking news story")
+    facts = analysis.get("consensus_facts", [])
     disputes = analysis.get("disputed_claims", [])
     exaggerations = analysis.get("exaggerations", [])
-    key_details = analysis.get("key_details", [])
+    key_data = analysis.get("key_data", {})
     severity = analysis.get("severity", "medium")
     
-    prompt = f"""<s>[INST] You are a viral short-form video scriptwriter. Write a 30-45 second narration script for a news video about this topic.
-
-TOPIC: {topic_summary}
+    prompt = f"""Generate a script for a 30-45 second news video about:
+"{topic}"
 
 VERIFIED FACTS:
-{chr(10).join(f'- {f}' for f in consensus)}
+{chr(10).join(f"- {f}" for f in facts[:6]) if facts else "- Limited verified information available"}
 
-DISPUTED/QUESTIONABLE CLAIMS:
-{chr(10).join(f'- {d}' for d in disputes) if disputes else '- None'}
+KEY DETAILS:
+- Who: {key_data.get('who', 'Unknown')}
+- What: {key_data.get('what', topic)}
+- Where: {key_data.get('where', 'Not specified')}
+- When: {key_data.get('when', 'Recent')}
+- Impact: {key_data.get('impact', 'Under investigation')}
 
-EXAGGERATIONS BY SOME SOURCES:
-{chr(10).join(f'- {e}' for e in exaggerations) if exaggerations else '- None'}
+{f"DISPUTED CLAIMS (mention cautiously):{chr(10)}" + chr(10).join(f"- {d.get('claim', d) if isinstance(d, dict) else d}" for d in disputes[:3]) if disputes else ""}
 
-KEY CONTEXT:
-{chr(10).join(f'- {k}' for k in key_details) if key_details else '- None'}
+{f"EXAGGERATIONS TO AVOID:{chr(10)}" + chr(10).join(f"- {e.get('original', e) if isinstance(e, dict) else e}" for e in exaggerations[:3]) if exaggerations else ""}
 
-SEVERITY: {severity}
+Story severity: {severity}
 
-Write EXACTLY 4-5 scenes in this JSON format:
+Respond with ONLY a JSON array of 4-5 scenes:
 [
   {{
-    "scene_type": "hook",
-    "narration": "Attention-grabbing 1-2 sentences. Start with something provocative. Under 15 words.",
-    "image_prompt": "Detailed visual description for AI image generation. Photorealistic, dramatic, cinematic.",
-    "estimated_duration": 3
-  }},
-  {{
-    "scene_type": "context",
-    "narration": "What happened in 2-3 clear sentences. Simple language.",
-    "image_prompt": "Visual showing the event or situation",
+    "scene_number": 1,
+    "scene_type": "hook|context|facts|twist|kicker",
+    "narration": "The exact words to speak (5-10 seconds worth, ~15-25 words)",
+    "image_prompt": "Detailed cinematic image prompt for this scene (40+ words, describe composition, lighting, mood, colors, no text/logos)",
     "estimated_duration": 7
-  }},
+  }}
+]"""
+    
+    return prompt
+
+
+def _build_followup_prompt(analysis: dict, historical_context: dict) -> str:
+    """Build a follow-up script prompt with historical context."""
+    topic = analysis.get("topic_summary", "Developing story")
+    facts = analysis.get("consensus_facts", [])
+    
+    prev_title = historical_context.get("title", "")
+    prev_analysis = historical_context.get("analysis", {})
+    prev_facts = prev_analysis.get("consensus_facts", [])
+    prev_summary = prev_analysis.get("topic_summary", prev_title)
+    
+    prompt = f"""Generate a FOLLOW-UP script for a developing news story.
+
+PREVIOUS COVERAGE:
+Topic: {prev_summary}
+Previously known facts:
+{chr(10).join(f"- {f}" for f in prev_facts[:4]) if prev_facts else "- Original story was covered earlier"}
+
+NEW DEVELOPMENTS:
+Topic: {topic}
+New information:
+{chr(10).join(f"- {f}" for f in facts[:6]) if facts else "- Story is still developing"}
+
+Respond with ONLY a JSON array of 4-5 scenes:
+[
   {{
-    "scene_type": "facts",
-    "narration": "The key verified facts. Punchy. Short sentences. Hit hard.",
-    "image_prompt": "Visual supporting the key facts",
-    "estimated_duration": 12
-  }},
-  {{
-    "scene_type": "twist",
-    "narration": "But here's what most outlets aren't telling you... [disputed or exaggerated stuff]",
-    "image_prompt": "Dramatic visual shift",
-    "estimated_duration": 10
-  }},
-  {{
-    "scene_type": "kicker",
-    "narration": "Closing thought. Make them think. Under 10 words.",
-    "image_prompt": "Powerful closing visual",
-    "estimated_duration": 4
+    "scene_number": 1,
+    "scene_type": "recap|update|new_facts|twist|kicker",
+    "narration": "The exact words to speak (5-10 seconds worth, ~15-25 words)",
+    "image_prompt": "Detailed cinematic image prompt (40+ words, photorealistic, 9:16 vertical, no text/logos)",
+    "estimated_duration": 7
   }}
 ]
 
-RULES:
-- Total narration must be speakable in 30-45 seconds
-- Use simple, conversational language — NOT news anchor formal
-- Short sentences. Punchy. Like you're telling a friend.
-- The hook MUST grab attention in the first 2 seconds
-- Image prompts should be detailed, photorealistic, cinematic style
-- Never use emojis or hashtags in narration
-- The "twist" scene should reveal what sources disagree on or exaggerate
-[/INST]"""
-
-    log.info("Generating video script...")
-    response = _call_hf_llm(prompt, max_tokens=1500)
+IMPORTANT: Scene 1 must briefly recap the original story. Scene 2+ reveals what changed."""
     
-    if not response:
-        log.error("Failed to generate script")
+    return prompt
+
+
+def generate_script(analysis: dict, 
+                    historical_context: Optional[dict] = None) -> Optional[list[dict]]:
+    """
+    Generate a video script from analysis results.
+    
+    Args:
+        analysis: cross-reference analysis output
+        historical_context: if provided, generates a follow-up script
+    
+    Returns:
+        List of scene dicts, or None on failure.
+    """
+    if not analysis:
+        log.error("No analysis provided for script generation")
         return None
     
-    # Parse JSON scenes from response
-    try:
-        json_start = response.find("[")
-        json_end = response.rfind("]") + 1
-        if json_start >= 0 and json_end > json_start:
-            scenes = json.loads(response[json_start:json_end])
-            
-            # Validate and clean
-            valid_scenes = []
-            for scene in scenes:
-                if "narration" in scene and "image_prompt" in scene:
-                    scene.setdefault("scene_type", "facts")
-                    scene.setdefault("estimated_duration", 8)
-                    # Ensure duration is a number
-                    scene["estimated_duration"] = float(scene["estimated_duration"])
-                    valid_scenes.append(scene)
-            
-            if valid_scenes:
-                total_duration = sum(s["estimated_duration"] for s in valid_scenes)
-                log.info(f"Script generated: {len(valid_scenes)} scenes, "
-                         f"~{total_duration:.0f}s total")
-                return valid_scenes
-    except json.JSONDecodeError:
-        log.warning("Failed to parse JSON from script response")
+    is_followup = historical_context is not None
     
-    # Fallback: create a basic script from the analysis
-    log.warning("Using fallback script generation")
-    return _fallback_script(analysis)
+    if is_followup:
+        prompt = _build_followup_prompt(analysis, historical_context)
+        system = SYSTEM_PROMPT_FOLLOWUP
+        log.info("Generating FOLLOW-UP video script...")
+    else:
+        prompt = _build_script_prompt(analysis)
+        system = SYSTEM_PROMPT_FRESH
+        log.info("Generating fresh video script...")
+    
+    response = call_hf_llm(prompt, max_tokens=2000, temperature=0.4,
+                           system_prompt=system)
+    
+    if not response:
+        log.warning("LLM returned no response, using fallback script")
+        return _fallback_script(analysis, is_followup)
+    
+    # Parse scenes from response
+    scenes = _parse_scenes(response)
+    
+    if not scenes:
+        log.warning("Could not parse scenes from LLM response, using fallback")
+        return _fallback_script(analysis, is_followup)
+    
+    # Validate and clean scenes
+    valid_scenes = _validate_scenes(scenes)
+    
+    if not valid_scenes:
+        log.warning("No valid scenes after validation, using fallback")
+        return _fallback_script(analysis, is_followup)
+    
+    log.info(f"Script generated: {len(valid_scenes)} scenes, "
+             f"~{sum(s.get('estimated_duration', 7) for s in valid_scenes)}s total")
+    
+    return valid_scenes
 
 
-def _fallback_script(analysis: dict) -> list[dict]:
-    """Generate a basic script without LLM if the API fails."""
-    topic = analysis.get("topic_summary", "Breaking news")
-    facts = analysis.get("consensus_facts", ["Details are still emerging."])
+def _parse_scenes(response: str) -> Optional[list[dict]]:
+    """Extract scene array from LLM response."""
+    # Try direct parse
+    try:
+        result = json.loads(response)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Try extracting JSON array from response
+    patterns = [
+        r'```json\s*\n?(\[[\s\S]*?\])\n?```',
+        r'```\s*\n?(\[[\s\S]*?\])\n?```',
+        r'(\[[\s\S]*\])',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, response, re.DOTALL)
+        for match in matches:
+            try:
+                result = json.loads(match)
+                if isinstance(result, list):
+                    return result
+            except json.JSONDecodeError:
+                continue
+    
+    return None
+
+
+def _validate_scenes(scenes: list[dict]) -> list[dict]:
+    """Validate and clean scene data."""
+    valid = []
+    for scene in scenes[:config.MAX_SCENES]:
+        narration = scene.get("narration", "").strip()
+        if not narration:
+            continue
+        
+        # Ensure required fields
+        clean_scene = {
+            "scene_number": scene.get("scene_number", len(valid) + 1),
+            "scene_type": scene.get("scene_type", "context"),
+            "narration": narration,
+            "image_prompt": scene.get("image_prompt", 
+                f"Cinematic news visual depicting: {narration[:100]}. "
+                "Photorealistic, dramatic lighting, 9:16 vertical, editorial quality"),
+            "estimated_duration": min(max(scene.get("estimated_duration", 7), 3), 12),
+        }
+        valid.append(clean_scene)
+    
+    return valid
+
+
+def _fallback_script(analysis: dict, is_followup: bool = False) -> list[dict]:
+    """Generate a basic script when LLM fails."""
+    topic = analysis.get("topic_summary", "Breaking news story")
+    facts = analysis.get("consensus_facts", [])
+    sources = analysis.get("sources", ["multiple sources"])
+    severity = analysis.get("severity", "medium")
+    key_data = analysis.get("key_data", {})
+    
+    if is_followup:
+        hook = f"The story about {topic} just took a new turn."
+    else:
+        hook = f"Breaking: {topic}. Here's what we know so far."
     
     scenes = [
         {
+            "scene_number": 1,
             "scene_type": "hook",
-            "narration": f"You need to hear about this. {topic}",
-            "image_prompt": f"Dramatic cinematic photo related to: {topic}. Dark moody lighting, photorealistic, 4K",
-            "estimated_duration": 4.0,
+            "narration": hook,
+            "image_prompt": (f"Dramatic breaking news scene with urgent atmosphere. "
+                f"Abstract representation of {topic[:50]}. "
+                "Dark moody background with spotlight, photorealistic, "
+                "9:16 vertical format, cinematic lighting, editorial quality"),
+            "estimated_duration": 6,
         },
         {
+            "scene_number": 2,
+            "scene_type": "context",
+            "narration": f"According to {', '.join(sources[:2])}, {facts[0] if facts else 'this story is still developing'}.",
+            "image_prompt": (f"Professional newsroom environment showing investigation and reporting. "
+                "Multiple screens displaying data analysis, photorealistic, "
+                "9:16 vertical format, cinematic lighting, blue-toned"),
+            "estimated_duration": 8,
+        },
+        {
+            "scene_number": 3,
             "scene_type": "facts",
-            "narration": ". ".join(facts[:3]) if facts else "Here are the facts.",
-            "image_prompt": f"News-style photo illustrating: {facts[0] if facts else topic}. Photorealistic, cinematic",
-            "estimated_duration": 15.0,
+            "narration": facts[1] if len(facts) > 1 else f"The impact is expected to be {severity}.",
+            "image_prompt": (f"Visual metaphor for impact and consequence in context of {topic[:40]}. "
+                "Dramatic composition with strong contrast, photorealistic, "
+                "9:16 vertical format, golden hour lighting"),
+            "estimated_duration": 7,
         },
         {
+            "scene_number": 4,
             "scene_type": "kicker",
-            "narration": "Stay informed. The truth matters.",
-            "image_prompt": "Dramatic close-up of a newspaper headline, cinematic lighting, moody atmosphere",
-            "estimated_duration": 4.0,
+            "narration": "We'll keep tracking this story. Follow for the next update.",
+            "image_prompt": ("Futuristic lens or eye symbolizing watchful journalism and truth-seeking. "
+                "Clean dark background with glowing elements, photorealistic, "
+                "9:16 vertical format, dramatic rim lighting"),
+            "estimated_duration": 5,
         },
     ]
     
-    log.info(f"Fallback script: {len(scenes)} scenes")
     return scenes

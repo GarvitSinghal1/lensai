@@ -1,153 +1,166 @@
 """
-Cross-Reference Engine — compares multiple sources on the same topic
-to find consensus facts, disputed claims, and exaggerations.
+Cross-Reference Engine v2 — uses Kimi K2.5 (with fallbacks) to analyze
+articles from multiple sources on the same topic. Identifies consensus facts,
+disputed claims, exaggerations, and key data points.
 """
 
 import json
-import time
-import requests
+import re
 from typing import Optional
 
 import config
 from utils.logger import log
+from utils.hf_client import call_hf_llm
 
 
-def _call_hf_llm(prompt: str, max_tokens: int = 1500) -> Optional[str]:
-    """Call HF Inference API for text generation."""
-    headers = {"Authorization": f"Bearer {config.HF_API_KEY}"}
+# ─── System Prompt ─────────────────────────────────────────
+SYSTEM_PROMPT = """You are Lens AI, an elite investigative journalist AI. Your job is to cross-reference multiple news articles about the same story and produce a rigorous factual analysis.
+
+RULES:
+1. ONLY state facts that appear in 2+ independent sources
+2. Flag claims that appear in only 1 source as "unverified"  
+3. Identify sensationalized language and rate its severity
+4. Note contradictions between sources explicitly
+5. Assign an overall severity: "low" (lifestyle/entertainment), "medium" (politics/economy), "high" (crisis/conflict/disaster)
+6. Be specific with numbers, names, dates — never vague generalizations
+7. Always output valid JSON, nothing else"""
+
+
+def _build_analysis_prompt(articles: list[dict]) -> str:
+    """Build the analysis prompt from a list of articles."""
+    articles_text = ""
+    for i, article in enumerate(articles[:8]):  # Cap at 8 articles
+        source = article.get("source", "Unknown")
+        title = article.get("title", "No title")
+        text = article.get("text", article.get("summary", ""))[:2000]
+        articles_text += f"\n--- SOURCE {i+1}: {source} ---\nTitle: {title}\n{text}\n"
     
-    # Try primary model, then fallback
-    models = [config.LLM_MODEL, config.LLM_FALLBACK]
+    prompt = f"""Analyze these {len(articles)} news articles about the same topic. Cross-reference them for accuracy.
+
+{articles_text}
+
+Respond with ONLY this JSON structure:
+{{
+  "topic_summary": "One clear sentence describing what happened",
+  "severity": "low|medium|high",
+  "consensus_facts": [
+    "Fact confirmed by multiple sources (cite which sources agree)"
+  ],
+  "disputed_claims": [
+    {{"claim": "What was claimed", "source": "Who said it", "issue": "Why it's disputed"}}
+  ],
+  "exaggerations": [
+    {{"original": "The sensationalized claim", "reality": "What the evidence actually shows", "severity": "mild|moderate|severe"}}
+  ],
+  "key_data": {{
+    "who": ["Key people/organizations involved"],
+    "what": "Core event in one sentence",
+    "where": "Location(s)",
+    "when": "Time/date",
+    "impact": "Who is affected and how"
+  }},
+  "source_reliability_notes": "Any notable differences in how sources covered this"
+}}"""
     
-    for model in models:
-        url = f"{config.HF_API_BASE}/{model}"
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": max_tokens,
-                "temperature": 0.3,
-                "return_full_text": False,
-            },
-        }
-        
-        for attempt in range(config.HF_MAX_RETRIES):
-            try:
-                resp = requests.post(
-                    url, headers=headers, json=payload,
-                    timeout=config.HF_API_TIMEOUT
-                )
-                
-                if resp.status_code == 503:
-                    # Model loading, wait and retry
-                    wait_time = resp.json().get("estimated_time", 30)
-                    log.warning(f"Model {model} loading, waiting {wait_time:.0f}s...")
-                    time.sleep(min(wait_time, 60))
-                    continue
-                
-                resp.raise_for_status()
-                result = resp.json()
-                
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("generated_text", "").strip()
-                
-                return str(result).strip()
-                
-            except requests.exceptions.Timeout:
-                log.warning(f"Timeout on {model} (attempt {attempt + 1})")
-                continue
-            except Exception as e:
-                log.warning(f"Error with {model}: {e}")
-                if attempt < config.HF_MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
-                continue
-        
-        log.warning(f"All retries failed for {model}, trying fallback...")
-    
-    log.error("All LLM models failed")
-    return None
+    return prompt
 
 
 def cross_reference_articles(articles: list[dict]) -> Optional[dict]:
     """
-    Cross-reference multiple articles on the same topic.
+    Cross-reference multiple articles about the same topic.
     
-    Returns a dict with:
-      - topic_summary: one-line summary of the topic
-      - consensus_facts: list of facts agreed upon by multiple sources
-      - disputed_claims: claims only in some sources or conflicting
-      - exaggerations: sensationalized language or unverified claims
-      - key_details: important context or details
-      - sources_used: list of source names
+    Returns a structured analysis dict, or None on failure.
     """
     if not articles:
+        log.warning("No articles to cross-reference")
         return None
     
-    # Build source summaries for the prompt
-    source_texts = []
-    for i, article in enumerate(articles[:8]):  # Cap at 8 to fit context
-        source_name = article.get("source_name", f"Source {i+1}")
-        title = article.get("title", "")
-        text = article.get("full_text", article.get("summary", ""))
-        # Truncate long articles
-        if len(text) > 1500:
-            text = text[:1500] + "..."
-        source_texts.append(f"[{source_name}] {title}\n{text}")
+    if len(articles) == 1:
+        log.warning("Only 1 article — limited cross-referencing possible")
     
-    all_sources = "\n\n---\n\n".join(source_texts)
-    source_names = [a.get("source_name", "Unknown") for a in articles[:8]]
+    prompt = _build_analysis_prompt(articles)
     
-    prompt = f"""<s>[INST] You are a meticulous fact-checking journalist. Analyze these {len(source_texts)} news articles covering the SAME story from different sources. Your job is to find the TRUTH.
-
-ARTICLES:
-{all_sources}
-
-Respond in EXACTLY this JSON format, nothing else:
-{{
-  "topic_summary": "One clear sentence describing what happened",
-  "consensus_facts": ["Fact agreed by 3+ sources", "Another agreed fact"],
-  "disputed_claims": ["Claim only in 1-2 sources or conflicting info"],
-  "exaggerations": ["Sensationalized or unverified claims"],
-  "key_details": ["Important context some sources omit"],
-  "severity": "high/medium/low"
-}}
-
-Rules:
-- consensus_facts: ONLY include things stated by AT LEAST 2 different sources
-- disputed_claims: things where sources DISAGREE or only ONE source mentions
-- exaggerations: language that's clearly sensationalized vs neutral reporting
-- Be specific, cite which sources when noting disputes
-- severity: how newsworthy is this? high=breaking, medium=notable, low=minor
-[/INST]"""
-
-    log.info(f"Cross-referencing {len(source_texts)} sources...")
-    response = _call_hf_llm(prompt, max_tokens=1500)
+    log.info(f"Cross-referencing {len(articles)} articles...")
+    response = call_hf_llm(prompt, max_tokens=2000, temperature=0.1, 
+                           system_prompt=SYSTEM_PROMPT)
     
     if not response:
-        log.error("Failed to get cross-reference analysis")
-        return None
+        log.error("LLM returned no response for cross-reference")
+        return _fallback_analysis(articles)
     
     # Parse JSON from response
-    try:
-        # Try to extract JSON from the response
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            analysis = json.loads(response[json_start:json_end])
-            analysis["sources_used"] = source_names
-            log.info(f"Analysis complete: {len(analysis.get('consensus_facts', []))} consensus facts, "
-                     f"{len(analysis.get('disputed_claims', []))} disputes")
-            return analysis
-    except json.JSONDecodeError:
-        log.warning("Failed to parse JSON from LLM response, using raw text")
+    analysis = _parse_json_response(response)
     
-    # Fallback: return raw text as analysis
+    if analysis:
+        # Enrich with metadata
+        analysis["article_count"] = len(articles)
+        analysis["sources"] = list(set(a.get("source", "Unknown") for a in articles))
+        log.info(f"Analysis complete: severity={analysis.get('severity', '?')}, "
+                 f"{len(analysis.get('consensus_facts', []))} facts, "
+                 f"{len(analysis.get('disputed_claims', []))} disputes")
+        return analysis
+    
+    log.warning("Could not parse LLM response, using fallback analysis")
+    return _fallback_analysis(articles)
+
+
+def _parse_json_response(response: str) -> Optional[dict]:
+    """Extract and parse JSON from LLM response, handling common issues."""
+    # Try direct parse first
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try extracting JSON from markdown code blocks
+    patterns = [
+        r'```json\s*\n?(.*?)\n?```',
+        r'```\s*\n?(.*?)\n?```',
+        r'\{[\s\S]*\}',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, response, re.DOTALL)
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+    
+    return None
+
+
+def _fallback_analysis(articles: list[dict]) -> dict:
+    """Generate a basic analysis when LLM fails."""
+    titles = [a.get("title", "") for a in articles]
+    sources = list(set(a.get("source", "Unknown") for a in articles))
+    main_title = max(titles, key=len) if titles else "Unknown topic"
+    
+    # Extract common words from titles for topic summary
+    all_words = " ".join(titles).lower().split()
+    word_freq = {}
+    for w in all_words:
+        if len(w) > 3:
+            word_freq[w] = word_freq.get(w, 0) + 1
+    common_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:5]
+    
     return {
-        "topic_summary": articles[0].get("title", "Unknown topic"),
-        "consensus_facts": [response[:500]],
+        "topic_summary": main_title,
+        "severity": "medium",
+        "consensus_facts": [
+            f"Multiple sources ({', '.join(sources[:3])}) are reporting on this story",
+            f"The story involves: {', '.join(w[0] for w in common_words[:3])}",
+        ],
         "disputed_claims": [],
         "exaggerations": [],
-        "key_details": [],
-        "sources_used": source_names,
-        "severity": "medium",
-        "raw_analysis": response,
+        "key_data": {
+            "who": sources,
+            "what": main_title,
+            "where": "Not specified",
+            "when": "Recent",
+            "impact": "Under investigation",
+        },
+        "source_reliability_notes": "Fallback analysis — LLM unavailable",
+        "article_count": len(articles),
+        "sources": sources,
     }
