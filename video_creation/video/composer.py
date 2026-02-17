@@ -19,7 +19,7 @@ from utils.logger import log
 # MoviePy v2 imports
 from moviepy import (
     ImageClip, AudioFileClip, CompositeVideoClip,
-    concatenate_videoclips, TextClip, ColorClip, VideoClip
+    concatenate_videoclips, TextClip, ColorClip, VideoClip, vfx
 )
 
 
@@ -250,15 +250,100 @@ def create_caption_clips(narration: str, duration: float,
     return caption_clips
 
 
+# ─── Visual Overlays ──────────────────────────────────────
+
+def create_lower_third(headline: str, duration: float) -> Optional[VideoClip]:
+    """Create a professional lower-third headline overlay."""
+    if not headline:
+        return None
+
+    w, h = 600, 100
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Stylish background (Blue gradient-ish or solid with design)
+    # Main box
+    draw.rectangle([0, 0, w, h], fill="#0033cc") # Deep Blue
+    # Accent strip
+    draw.rectangle([0, 0, 20, h], fill="#cc0000") # Red strip on left
+
+    # Text
+    try:
+        font = ImageFont.truetype(SYSTEM_FONT, 50)
+    except:
+        font = ImageFont.load_default()
+    
+    # Draw text centered vertically, left aligned with padding
+    draw.text((40, h // 2), headline.upper(), font=font, fill="white", anchor="lm")
+
+    # Create clip
+    # Calculate position: Left=30, Bottom=180 (from bottom edge)
+    # y = VIDEO_HEIGHT - h - 180
+    y_pos = config.VIDEO_HEIGHT - h - 180
+    
+    clip = (
+        ImageClip(np.array(img))
+        .with_duration(duration)
+        .with_position((30, y_pos))
+        .with_effects([vfx.CrossFadeIn(0.5)])
+    )
+    return clip
+
+
+def create_outro_clip() -> Optional[VideoClip]:
+    """Create a branded 3s outro sequence."""
+    duration = 2.5
+    w, h = config.VIDEO_WIDTH, config.VIDEO_HEIGHT
+    
+    # Black background opacity handled by composition? 
+    # Better to create a ColorClip background
+    bg = ColorClip(size=(w, h), color=(0, 0, 0)).with_duration(duration)
+    
+    # Logo
+    logo_path = config.MEDIA_DIR / "logo.png" # Assuming high-res logo exists
+    if not logo_path.exists():
+        return None
+
+    logo = (
+        ImageClip(str(logo_path))
+        .with_duration(duration)
+        .resized(width=400)
+        .with_position("center")
+        .with_effects([vfx.CrossFadeIn(0.5)])
+    )
+    
+    # Combine
+    intro = CompositeVideoClip([bg, logo]).with_duration(duration)
+    
+    # Audio for outro (Whoosh + Boom)
+    audio_clips = []
+    try:
+        if (config.SFX_DIR / "whoosh.wav").exists():
+            whoosh = AudioFileClip(str(config.SFX_DIR / "whoosh.wav")).with_start(0.2)
+            audio_clips.append(whoosh)
+        if (config.SFX_DIR / "boom.wav").exists():
+            boom = AudioFileClip(str(config.SFX_DIR / "boom.wav")).with_start(1.0)
+            audio_clips.append(boom)
+        
+        if audio_clips:
+            from moviepy import CompositeAudioClip
+            intro = intro.with_audio(CompositeAudioClip(audio_clips))
+    except Exception as e:
+        log.warning(f"Outro audio failed: {e}")
+
+    return intro
+
+
 # ─── Scene Assembly ───────────────────────────────────────
 
 def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
     """
-    Compose a single scene: image with Ken Burns + audio + captions.
+    Compose a single scene: image with Ken Burns + audio + captions + lower third.
     """
     image_path = scene.get("image_path")
     audio_path = scene.get("audio_path")
     narration = scene.get("narration", "")
+    headline = scene.get("headline", "")
     visual_effect = scene.get("visual_effect", "none")
     audio_effect = scene.get("audio_effect", "none")
     
@@ -285,6 +370,12 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
             .with_duration(duration)
             .with_position(("center", config.VIDEO_HEIGHT - overlay_height)))
         layers.append(overlay)
+
+        # Add Lower Third (if headline exists)
+        if headline:
+            lower_third = create_lower_third(headline, duration)
+            if lower_third:
+                layers.append(lower_third)
 
         # Add captions
         caption_clips = create_caption_clips(
@@ -378,6 +469,15 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
         log.error("No scenes could be composed")
         return None
 
+    # Create Outro Clip (Bonus Feature)
+    try:
+        outro_clip = create_outro_clip()
+        if outro_clip:
+            log.info("Adding brand outro sequence...")
+            scene_clips.append(outro_clip)
+    except Exception as e:
+        log.warning(f"Outro creation failed: {e}")
+
     try:
         # Concatenate scenes with crossfade
         if len(scene_clips) > 1 and config.CROSSFADE_DURATION > 0:
@@ -400,9 +500,9 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
                 logo_clip = (
                     ImageClip(str(logo_path))
                     .with_duration(final.duration)
-                    .resized(height=60)
-                    .with_position((final.w - 180, 20))  # top-right with padding
-                    .with_opacity(0.85)
+                    .resized(height=70) # Slightly larger
+                    .with_position((final.w - 220, 30))  # top-right with ONE padding (220px from right)
+                    .with_opacity(0.90)
                 )
                 final = CompositeVideoClip([final, logo_clip])
                 log.info("Logo overlay added.")

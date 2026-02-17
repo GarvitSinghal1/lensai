@@ -96,7 +96,8 @@ def query(payload: Dict[str, Any], model: str, task_type: str = "text-generation
     else:
         api_url = f"{config.HF_API_BASE}/{model}"
 
-    for attempt in range(config.HF_MAX_RETRIES):
+    attempts = max(config.HF_MAX_RETRIES, len(_key_manager.keys) * 2)
+    for attempt in range(attempts):
         current_key = _key_manager.get_current_key() # Get current key inside loop
         headers = {"Authorization": f"Bearer {current_key}"}
         
@@ -207,7 +208,8 @@ def query_custom_endpoint(url: str, payload: Dict[str, Any]) -> Any:
     """
     Query a specific custom endpoint with Key Rotation.
     """
-    for attempt in range(config.HF_MAX_RETRIES):
+    attempts = max(config.HF_MAX_RETRIES, len(_key_manager.keys) * 2)
+    for attempt in range(attempts):
         current_key = _key_manager.get_current_key()
         headers = {"Authorization": f"Bearer {current_key}"}
         try:
@@ -245,7 +247,8 @@ def query_replicate_image(prompt: str, model_id: str) -> Optional[bytes]:
         }
     }
 
-    for attempt in range(config.HF_MAX_RETRIES):
+    attempts = max(config.HF_MAX_RETRIES, len(_key_manager.keys) * 2)
+    for attempt in range(attempts):
         current_key = _key_manager.get_current_key()
         headers = {"Authorization": f"Bearer {current_key}"}
         
@@ -305,8 +308,8 @@ def generate_image(prompt: str) -> Optional[bytes]:
     """
     full_prompt = prompt + " " + config.IMAGE_STYLE_SUFFIX
     
-    # Check primary model if it's Flux
-    if "flux" in config.IMAGE_MODEL.lower():
+    # Check primary model if it's Flux or Hunyuan (Replicate provider)
+    if any(x in config.IMAGE_MODEL.lower() for x in ["flux", "hunyuan", "tencent"]):
         log.info(f"Generating image with {config.IMAGE_MODEL} (Router)...")
         img = query_replicate_image(full_prompt, config.IMAGE_MODEL)
         if img: return img

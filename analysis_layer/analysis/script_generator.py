@@ -97,6 +97,7 @@ Respond with ONLY a JSON array of 8-12 scenes:
     "scene_number": 1,
     "scene_type": "hook",
     "narration": "The exact words to speak (2-5 seconds worth)",
+    "headline": "SHORT HEADLINE (3-5 WORDS)",
     "image_prompt": "Detailed cinematic image prompt...",
     "audio_effect": "whoosh|boom|ding|camera_shutter|glitch|none",
     "visual_effect": "zoom_fast|shake|flash|none",
@@ -135,6 +136,7 @@ Respond with ONLY a JSON array of 8-12 scenes:
     "scene_number": 1,
     "scene_type": "recap",
     "narration": "The exact words to speak (2-5 seconds worth)",
+    "headline": "SHORT HEADLINE (3-5 WORDS)",
     "image_prompt": "Detailed cinematic image prompt...",
     "audio_effect": "whoosh|boom|ding|camera_shutter|glitch|none",
     "visual_effect": "zoom_fast|shake|flash|none",
@@ -244,6 +246,7 @@ def _validate_scenes(scenes: list[dict]) -> list[dict]:
             "scene_number": scene.get("scene_number", len(valid) + 1),
             "scene_type": scene.get("scene_type", "context"),
             "narration": narration,
+            "headline": scene.get("headline", "BREAKING NEWS").upper()[:25],
             "image_prompt": scene.get("image_prompt", 
                 f"Cinematic news visual depicting: {narration[:100]}. "
                 "Photorealistic, dramatic lighting, 9:16 vertical, editorial quality"),

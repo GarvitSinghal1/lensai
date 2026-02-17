@@ -106,7 +106,11 @@ TTS_FALLBACK_2 = ""
 IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell" 
 IMAGE_STYLE_SUFFIX = "cinematic lighting, realistic, 4k, detailed, dramatic angle"
 IMAGE_NEGATIVE_PROMPT = "blur, haze, deformed, ugly, cartoon, anime, text, watermark"
-IMAGE_FALLBACK = "stabilityai/stable-diffusion-xl-base-1.0"
+
+# Models
+# New request: tencent/HunyuanImage-3.0 via Replicate provider
+IMAGE_MODEL = "tencent/HunyuanImage-3.0"
+IMAGE_FALLBACK = "black-forest-labs/FLUX.1-schnell"
 IMAGE_FALLBACK_2 = "stabilityai/stable-diffusion-2-1"
 
 # TTS Fallback flags
@@ -147,7 +151,8 @@ ZOOM_FACTOR = 1.15                 # Ken Burns: zoom from 1.0 to this
 CROSSFADE_DURATION = 0.0           # 0.0 for hard cuts (fast pacing)
 
 # SFX Config
-SFX_DIR = BASE_DIR / "video_creation" / "media" / "sfx"
+MEDIA_DIR = BASE_DIR / "video_creation" / "media"
+SFX_DIR = MEDIA_DIR / "sfx"
 
 # Caption style
 CAPTION_FONT_SIZE = 60

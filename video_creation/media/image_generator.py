@@ -174,7 +174,81 @@ def generate_image(prompt: str, output_path: Path) -> Optional[str]:
     if not prompt.strip():
         log.warning("Empty prompt provided to image generator")
         return None
+        
+    # Privacy / Search Strategy:
+    # 1. Detect Specific People (Entities) -> Trigger Search
+    # 2. Generic concepts -> Use AI
     
+    should_search = False
+    search_query = prompt
+    
+    import re
+    # Check for specific patterns that indicate a person of interest
+    # We use the same regex patterns but trigger SEARCH instead of genericizing
+    entity_patterns = [
+        r"(?i)\b(Joe )?Biden\b",
+        r"(?i)\b(Donald )?Trump\b", 
+        r"(?i)\b(Barack )?Obama\b",
+        r"(?i)\b(Elon )?Musk\b",
+        r"(?i)\b(Bill )?Gates\b",
+        r"(?i)\b(Mark )?Zuckerberg\b",
+        r"(?i)\b(Jeff )?Bezos\b",
+        r"(?i)\b(Narendra )?Modi\b",
+        r"(?i)\b(Vladimir )?Putin\b",
+        r"(?i)\b(Volodymyr )?Zelenskyy?\b",
+        r"(?i)\b(Rishi )?Sunak\b", 
+        r"(?i)\b(Emmanuel )?Macron\b",
+        r"(?i)\b(Justin )?Trudeau\b"
+    ]
+    
+    for pattern in entity_patterns:
+        if re.search(pattern, prompt):
+            should_search = True
+            log.info(f"Detected named entity matching '{pattern}'. Switching to Web Search.")
+            break
+            
+    if should_search:
+        try:
+            from utils.image_searcher import search_google_images
+            # Clean up prompt for search (remove artistic style keywords if present?)
+            # Actually, "A photo of Bill Gates jumping" is a good search query.
+            # Maybe strip "cinematic lighting" etc if they were added (they aren't here yet, added inside hf_client).
+            
+            search_path = search_google_images(prompt, output_path)
+            if search_path:
+                return search_path
+            else:
+                log.warning("Web search failed. Falling back to AI (with sanitization?) or failing?")
+                # User said: "just don't use specific persons in the image generation"
+                # So if search fails, we should probably genericize like before to be safe?
+                # "You can use the AI to create a scared person... but not Bill Gates"
+                # So let's sanitize IF search fails.
+                pass 
+        except Exception as e:
+            log.error(f"Search module error: {e}")
+
+    # Fallback to AI (or primary AI if no entity)
+    # If we tried search and failed, sanitize strictly before AI
+    if should_search:
+        log.info("Search failed/skipped. Sanitizing prompt for AI fallback...")
+        replacements = {
+            r"(?i)\b(Joe )?Biden\b": "a politician",
+            r"(?i)\b(Donald )?Trump\b": "a politician", 
+            r"(?i)\b(Barack )?Obama\b": "a politician",
+            r"(?i)\b(Elon )?Musk\b": "a tech CEO",
+            r"(?i)\b(Bill )?Gates\b": "a tech CEO",
+            r"(?i)\b(Mark )?Zuckerberg\b": "a tech CEO",
+            r"(?i)\b(Jeff )?Bezos\b": "a tech CEO", 
+            r"(?i)\b(Narendra )?Modi\b": "a politician",
+            r"(?i)\b(Vladimir )?Putin\b": "a politician",
+            r"(?i)\b(Volodymyr )?Zelenskyy?\b": "a politician",
+            r"(?i)\b(Rishi )?Sunak\b": "a politician",
+            r"(?i)\b(Emmanuel )?Macron\b": "a politician",
+            r"(?i)\b(Justin )?Trudeau\b": "a politician"
+        }
+        for pattern, replacement in replacements.items():
+            prompt = re.sub(pattern, replacement, prompt)
+            
     log.info(f"Generating image: \"{prompt[:70]}...\"")
     output_path = Path(output_path).with_suffix('.png')
     
@@ -226,24 +300,27 @@ def generate_images_for_scenes(scenes: list[dict], temp_dir: Path, article_image
         success = False
         
         # Try to use a scraped image
-        # Reuse images if we have fewer images than scenes (Cyclic assignment)
-        if article_images:
-            # Pick image based on index modulo length
-            img_url = article_images[img_idx % len(article_images)]
+        # Try to use a scraped image (Linear assignment, no reuse)
+        if article_images and img_idx < len(article_images):
+            # Pick next available image
+            img_url = article_images[img_idx]
             img_idx += 1
             
-            log.info(f"Downloading image for scene {i+1}: {img_url[:60]}...")
+            log.info(f"Downloading scraped image {img_idx}/{len(article_images)} for scene {i+1}: {img_url[:60]}...")
             if _download_and_process_image(img_url, output_path):
                 scene["image_path"] = str(output_path)
                 success = True
-
             else:
-                log.warning(f"Image validation/download failed for {img_url[:40]}... trying next.")
+                log.warning(f"Image download failed for {img_url[:40]}.")
+                # If download failed, we consumed the URL. Should we try next?
+                # For simplicity, if this one failed, we fall through to AI gen for this scene.
+                # Or we could loop to find next valid one?
+                # Let's keep it simple: failed download = fall to AI for this scene.
         
-        # If scraped image unavailable/failed, try AI generation
+        # If scraped image unavailable (exhausted or failed), try AI generation
         if not success and scene.get("image_prompt"):
             prompt = scene["image_prompt"]
-            log.info(f"Generating AI image for scene {i+1}...")
+            log.info(f"Generating AI image for scene {i+1} (Reason: Scraped exhausted/failed)...")
             ai_image_path = generate_image(prompt, output_path)
             if ai_image_path:
                 scene["image_path"] = ai_image_path
