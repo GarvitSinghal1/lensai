@@ -7,6 +7,7 @@ Compatible with MoviePy >= 2.0
 import os
 import math
 from pathlib import Path
+import random
 from typing import Optional
 
 import numpy as np
@@ -53,12 +54,17 @@ SYSTEM_FONT = _find_system_font()
 # ─── Ken Burns Effect ────────────────────────────────────
 
 def apply_ken_burns(image_path: str, duration: float, zoom_start: float = 1.0,
-                     zoom_end: float = None) -> VideoClip:
+                     zoom_end: float = None, visual_effect: str = "none") -> VideoClip:
     """
-    Create a video clip from a still image with Ken Burns zoom effect.
-    The image slowly zooms from zoom_start to zoom_end over the duration.
+    Create a video clip from a still image with Ken Burns zoom or other effects.
     """
     zoom_end = zoom_end or config.ZOOM_FACTOR
+    
+    # Handle specific visual effects overrides
+    if visual_effect == "zoom_fast":
+        zoom_end = 1.5  # More aggressive zoom
+    elif visual_effect == "zoom_slow":
+        zoom_end = 1.05 # Subtle zoom
 
     # Load image at higher resolution for zoom headroom
     img = Image.open(image_path)
@@ -66,8 +72,8 @@ def apply_ken_burns(image_path: str, duration: float, zoom_start: float = 1.0,
         img = img.convert("RGB")
 
     # Ensure image is large enough for zooming
-    target_w = int(config.VIDEO_WIDTH * zoom_end * 1.1)
-    target_h = int(config.VIDEO_HEIGHT * zoom_end * 1.1)
+    target_w = int(config.VIDEO_WIDTH * max(zoom_end, 1.2)) # Extra buffer for shake
+    target_h = int(config.VIDEO_HEIGHT * max(zoom_end, 1.2))
 
     if img.width < target_w or img.height < target_h:
         img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
@@ -76,19 +82,31 @@ def apply_ken_burns(image_path: str, duration: float, zoom_start: float = 1.0,
     h, w = img_array.shape[:2]
 
     def make_frame(t):
-        """Generate a frame at time t with zoom applied."""
+        """Generate a frame at time t with zoom/shake applied."""
         progress = t / max(duration, 0.01)
         progress = min(progress, 1.0)
+        
+        # dynamic zoom
         current_zoom = zoom_start + (zoom_end - zoom_start) * progress
-
+        
         # Calculate crop region (zoom into center)
         crop_w = int(config.VIDEO_WIDTH / current_zoom)
         crop_h = int(config.VIDEO_HEIGHT / current_zoom)
-
-        # Center crop with slight drift for more dynamic feel
-        drift_x = int(20 * math.sin(progress * math.pi))
-        cx = w // 2 + drift_x
+        
+        # Center crop
+        cx = w // 2
         cy = h // 2
+        
+        # Apply standard drift
+        drift_x = int(20 * math.sin(progress * math.pi))
+        
+        # Apply SHAKE effect
+        if visual_effect == "shake":
+            intensity = 40 * (1 - progress) # Shake fades out
+            drift_x += int(random.uniform(-intensity, intensity))
+            cy += int(random.uniform(-intensity, intensity))
+            
+        cx += drift_x
 
         x1 = max(0, cx - crop_w // 2)
         y1 = max(0, cy - crop_h // 2)
@@ -116,6 +134,18 @@ def apply_ken_burns(image_path: str, duration: float, zoom_start: float = 1.0,
     # Create VideoClip with custom frame function
     clip = VideoClip(make_frame, duration=duration)
     clip = clip.with_fps(config.VIDEO_FPS)
+    
+    # Apply FLASH effect (overlay)
+    if visual_effect == "flash":
+        flash = ColorClip(size=(config.VIDEO_WIDTH, config.VIDEO_HEIGHT), color=(255, 255, 255))
+        flash = flash.with_duration(0.2).with_opacity(0.8)
+        # Composite flash over clip (this returns a CompositeVideoClip, so we wrap appropriately)
+        # But apply_ken_burns usually returns raw VideoClip. 
+        # Simpler: just return the clip, and let compose_scene handle overlay if possible?
+        # Or just execute it here.
+        # Let's keep it simple: we want to return a VideoClip. 
+        # A CompositeVideoClip IS a VideoClip.
+        clip = CompositeVideoClip([clip, flash.with_start(0)])
 
     return clip
 
@@ -165,7 +195,7 @@ def _render_caption_frame(text: str, highlight_word_idx: int,
         space_w = space_bbox[2] - space_bbox[0]
         current_x += word_w + space_w
 
-    return np.array(img.convert("RGB"))
+    return np.array(img)
 
 
 def create_caption_clips(narration: str, duration: float,
@@ -229,6 +259,9 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
     image_path = scene.get("image_path")
     audio_path = scene.get("audio_path")
     narration = scene.get("narration", "")
+    visual_effect = scene.get("visual_effect", "none")
+    audio_effect = scene.get("audio_effect", "none")
+    
     duration = scene.get("actual_duration", scene.get("estimated_duration", 5.0))
 
     if not image_path or not os.path.exists(image_path):
@@ -236,8 +269,8 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
         return None
 
     try:
-        # Create Ken Burns clip from image
-        video_clip = apply_ken_burns(image_path, duration)
+        # Create Ken Burns clip from image with VFX
+        video_clip = apply_ken_burns(image_path, duration, visual_effect=visual_effect)
 
         layers = [video_clip]
 
@@ -260,23 +293,47 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
         )
         layers.extend(caption_clips)
 
-        # Composite everything
+        # Composite visual layers
         scene_clip = CompositeVideoClip(
             layers,
             size=(config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
         ).with_duration(duration)
 
-        # Add audio
+        # Handle Audio (Narration + SFX)
+        audio_clips = []
+        
+        # 1. Narration
         if audio_path and os.path.exists(audio_path):
             try:
-                audio = AudioFileClip(audio_path)
+                narration_audio = AudioFileClip(audio_path)
                 # Match audio duration to video
-                if abs(audio.duration - duration) > 0.5:
-                    duration = audio.duration
+                if abs(narration_audio.duration - duration) > 0.5:
+                    duration = narration_audio.duration
                     scene_clip = scene_clip.with_duration(duration)
-                scene_clip = scene_clip.with_audio(audio)
+                audio_clips.append(narration_audio)
             except Exception as e:
                 log.warning(f"Failed to attach audio: {e}")
+        
+        # 2. Sound Effects
+        if audio_effect and audio_effect != "none":
+            sfx_path = config.SFX_DIR / f"{audio_effect}.wav"
+            if sfx_path.exists():
+                try:
+                    sfx_audio = AudioFileClip(str(sfx_path))
+                    # Lower volume for SFX so narration is clear
+                    sfx_audio = sfx_audio.with_volume_scaled(0.6)
+                    # SFX usually starts at 0, or maybe slight offset? Start at 0 for punchiness.
+                    audio_clips.append(sfx_audio)
+                except Exception as e:
+                    log.warning(f"Failed to load SFX {sfx_path}: {e}")
+            else:
+                 log.debug(f"SFX not found: {sfx_path}")
+
+        # Mix audio
+        if audio_clips:
+            from moviepy import CompositeAudioClip
+            final_audio = CompositeAudioClip(audio_clips)
+            scene_clip = scene_clip.with_audio(final_audio)
 
         return scene_clip
 

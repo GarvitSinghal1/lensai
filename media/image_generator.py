@@ -28,6 +28,11 @@ def _save_and_resize_image(image_bytes: bytes, output_path: Path) -> bool:
     try:
         img = Image.open(io.BytesIO(image_bytes))
         
+        # Validate image dimensions (avoid tracking pixels or icons)
+        if img.width < 300 or img.height < 300:
+            log.warning(f"Image too small ({img.width}x{img.height}), skipping.")
+            return False
+
         # Convert to RGB if necessary (RGBA → RGB)
         if img.mode in ("RGBA", "P", "LA"):
             background = Image.new("RGB", img.size, (0, 0, 0))
@@ -39,11 +44,28 @@ def _save_and_resize_image(image_bytes: bytes, output_path: Path) -> bool:
         elif img.mode != "RGB":
             img = img.convert("RGB")
         
-        # Resize to target video dimensions
-        img = img.resize(
-            (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
-            Image.Resampling.LANCZOS
-        )
+        # Resize to target video dimensions (Aspect Fill)
+        target_ratio = config.VIDEO_WIDTH / config.VIDEO_HEIGHT
+        img_ratio = img.width / img.height
+        
+        if img_ratio > target_ratio:
+            # Image is wider than target
+            new_height = config.VIDEO_HEIGHT
+            new_width = int(new_height * img_ratio)
+        else:
+            # Image is taller than target
+            new_width = config.VIDEO_WIDTH
+            new_height = int(new_width / img_ratio)
+            
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Center crop to fit exactly
+        left = (new_width - config.VIDEO_WIDTH) // 2
+        top = (new_height - config.VIDEO_HEIGHT) // 2
+        right = left + config.VIDEO_WIDTH
+        bottom = top + config.VIDEO_HEIGHT
+        
+        img = img.crop((left, top, right, bottom))
         
         img.save(output_path, "PNG", quality=95)
         return True
@@ -59,18 +81,23 @@ def _generate_solid_fallback(output_path: Path, text: str = "") -> bool:
         from PIL import ImageDraw, ImageFont
         
         # Brighter blue/purple gradient background
-        img = Image.new("RGB", (config.VIDEO_WIDTH, config.VIDEO_HEIGHT), (20, 20, 40))
+        # Brighter background (Deep Blue/Purple but visible)
+        # Using a much brighter gradient (Cyan -> Magenta -> Yellow) to be unmistakably NOT black
+        img = Image.new("RGB", (config.VIDEO_WIDTH, config.VIDEO_HEIGHT), (255, 255, 255))
         draw = ImageDraw.Draw(img)
         
-        # Add gradient effect (Dark Blue -> Lighter Blue/Purple)
+        # Add gradient effect (Cyan -> Magenta)
         for y in range(config.VIDEO_HEIGHT):
-            r = int(20 + (40 * y / config.VIDEO_HEIGHT))
-            g = int(20 + (20 * y / config.VIDEO_HEIGHT))
-            b = int(60 + (80 * y / config.VIDEO_HEIGHT))
+            # Vivid gradient: Cyan (0, 255, 255) to Magenta (255, 0, 255)
+            r = int(255 * (y / config.VIDEO_HEIGHT))
+            g = int(255 * ((config.VIDEO_HEIGHT - y) / config.VIDEO_HEIGHT))
+            b = 255
             draw.line([(0, y), (config.VIDEO_WIDTH, y)], fill=(r, g, b))
         
         # Add explicit "IMAGE GENERATION FAILED" warning
-        draw.text((50, 50), "AI IMAGE GEN FAILED", fill=(255, 100, 100))
+        # Draw a box for text backdrop
+        draw.rectangle([50, config.VIDEO_HEIGHT//2 - 100, config.VIDEO_WIDTH-50, config.VIDEO_HEIGHT//2 + 100], fill=(0,0,0,128))
+        draw.text((100, config.VIDEO_HEIGHT//2), "AI IMAGE GEN FAILED", fill=(255, 255, 255))
         
         # Add text if provided
         if text:
@@ -168,38 +195,68 @@ def generate_image(prompt: str, output_path: Path) -> Optional[str]:
     return None
 
 
-def generate_images_for_scenes(scenes: list[dict], temp_dir: Path) -> list[dict]:
+def _download_and_process_image(url: str, output_path: Path) -> bool:
+    """Download image from URL and resize/crop to target dimensions."""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        
+        return _save_and_resize_image(resp.content, output_path)
+    except Exception as e:
+        log.warning(f"Failed to download image {url}: {e}")
+        return False
+
+def generate_images_for_scenes(scenes: list[dict], temp_dir: Path, article_images: list[str] = None) -> list[dict]:
     """
-    Generate images for all scenes in a script.
-    
-    Adds 'image_path' to each scene dict.
-    Returns the updated scenes list.
+    Assign images to scenes using scraped article images.
     """
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
     
+    if not article_images:
+        article_images = []
+        
+    img_idx = 0
+    
     for i, scene in enumerate(scenes):
-        image_prompt = scene.get("image_prompt", "")
-        if not image_prompt:
-            image_prompt = f"Cinematic news visual: {scene.get('narration', 'Breaking news')[:100]}"
+        output_path = temp_dir / f"scene_{i:02d}.png"
+        success = False
         
-        image_file = temp_dir / f"scene_{i:02d}.png"
-        result = generate_image(image_prompt, image_file)
+        # Try to use a scraped image
+        # Reuse images if we have fewer images than scenes (Cyclic assignment)
+        if article_images:
+            # Pick image based on index modulo length
+            img_url = article_images[img_idx % len(article_images)]
+            img_idx += 1
+            
+            log.info(f"Downloading image for scene {i+1}: {img_url[:60]}...")
+            if _download_and_process_image(img_url, output_path):
+                scene["image_path"] = str(output_path)
+                success = True
+
+            else:
+                log.warning(f"Image validation/download failed for {img_url[:40]}... trying next.")
         
-        if result:
-            scene["image_path"] = result
-        else:
-            # Generate fallback
+        # If scraped image unavailable/failed, try AI generation
+        if not success and scene.get("image_prompt"):
+            prompt = scene["image_prompt"]
+            log.info(f"Generating AI image for scene {i+1}...")
+            ai_image_path = generate_image(prompt, output_path)
+            if ai_image_path:
+                scene["image_path"] = ai_image_path
+                success = True
+        # If no image found or download failed, use fallback
+        if not success:
+            log.warning(f"No valid image found for scene {i+1}, using fallback.")
             fallback = temp_dir / f"scene_{i:02d}_fallback.png"
             if _generate_solid_fallback(fallback, scene.get("narration", "")[:80]):
                 scene["image_path"] = str(fallback)
             else:
                 scene["image_path"] = None
-        
-        # Delay between image gen calls
-        if i < len(scenes) - 1:
-            time.sleep(2)
-    
+                
     generated = sum(1 for s in scenes if s.get("image_path"))
-    log.info(f"Image generation complete: {generated}/{len(scenes)} scenes")
+    log.info(f"Visuals assigned: {generated}/{len(scenes)} scenes")
     return scenes

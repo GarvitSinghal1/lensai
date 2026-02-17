@@ -299,9 +299,23 @@ def _process_single_topic(cluster: dict, temp_dir: Path,
         log.error("  TTS generation failed for all scenes")
         return None
     
+    # Collect available images from articles
+    article_images = [
+        a["top_image"] for a in enriched_articles 
+        if a.get("top_image") and a["top_image"].startswith("http")
+    ]
+    # Deduplicate preserving order
+    seen_imgs = set()
+    unique_images = []
+    for img in article_images:
+        if img not in seen_imgs:
+            unique_images.append(img)
+            seen_imgs.add(img)
+    article_images = unique_images
+
     # Step 8: Generate images for each scene
-    log.info(f"  🎨 [{prefix}] Generating visuals...")
-    scenes = generate_images_for_scenes(scenes, temp_dir)
+    log.info(f"  🎨 [{prefix}] Using scraped visuals ({len(article_images)} available)...")
+    scenes = generate_images_for_scenes(scenes, temp_dir, article_images)
     
     # Filter scenes with both audio and image
     valid_scenes = [

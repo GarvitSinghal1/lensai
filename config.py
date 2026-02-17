@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = BASE_DIR / "temp"
 DB_DIR = BASE_DIR / "db"
-DB_PATH = DB_DIR / "news.db"
+DB_PATH = Path(os.getenv("DB_PATH_OVERRIDE")) if os.getenv("DB_PATH_OVERRIDE") else DB_DIR / "news.db"
 HISTORY_DIR = BASE_DIR / "history"  # Stores past topic analyses for follow-ups
 
 # Create directories
@@ -26,29 +26,56 @@ DB_DIR.mkdir(exist_ok=True)
 HISTORY_DIR.mkdir(exist_ok=True)
 
 # ─── API Keys ────────────────────────────────────────────
-HF_API_KEY = os.getenv("hff_key", "") or os.getenv("HF_TOKEN", "")
+# ─── API Keys ────────────────────────────────────────────
+# Support multiple keys for rotation (Follow-the-Sun / Free Tier Cycling)
+HF_TOKENS = []
 
-# ─── HF Model Config ────────────────────────────────────
-# Text generation (using OpenAI-compatible router endpoint)
-# Kimi K2.5 (Novita provider)
-LLM_MODEL = "moonshotai/Kimi-K2.5:novita"
-# Zephyr 7B (Featherless provider)
-LLM_FALLBACK = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
-# Llama 3 won't work with chat/completions unless we have a provider suffix, keeping as fallback just in case
-LLM_FALLBACK_2 = "meta-llama/Llama-3.2-3B-Instruct"
+# 1. Primary key (legacy preference order)
+_primary = os.getenv("hff_key") or os.getenv("HF_TOKEN")
+if _primary:
+    HF_TOKENS.append(_primary)
 
-# TTS (text-to-speech) — using Replicate Kokoro endpoint
-TTS_MODEL = "kokoro-replicate" # Special flag for hf_client
-TTS_API_URL = "https://router.huggingface.co/replicate/v1/predictions"
-TTS_FALLBACK = "facebook/mms-tts-eng" # Attempt standard endpoint for fallback
-TTS_FALLBACK_2 = "microsoft/speecht5_tts" # Another official fallback
+# 2. Additional numbered keys (HF_TOKEN_1 ... HF_TOKEN_10 OR HF_TOKEN1 ... HF_TOKEN10)
+for i in range(1, 11):
+    _token = os.getenv(f"HF_TOKEN_{i}") or os.getenv(f"HF_TOKEN{i}")
+    if _token and _token not in HF_TOKENS:
+        HF_TOKENS.append(_token)
+
+if not HF_TOKENS:
+    HF_TOKENS = [""] # Fallback to empty string if no keys found
+
+HF_API_KEY = HF_TOKENS[0] # Default to first key for legacy compatibility
+
+# ─── HF API Config ──────────────────────────────────────
+# Standard Inference API (router didn't work for MMS/SpeechT5)
+HF_API_BASE = "https://api-inference.huggingface.co/models"
+HF_API_TIMEOUT = 180               # Seconds to wait for HF model response (K2.5 needs more)
+HF_MAX_RETRIES = 3                 # Retry failed API calls
+
+# ─── Groq API Config ────────────────────────────────────
+GROQ_API_KEY = os.getenv("GROQ_KEY") or os.getenv("GROQ_API_KEY")
+
+# ─── LLM Model Config ────────────────────────────────────
+# Text generation (using Groq)
+# Kimi K2 (Groq provider)
+LLM_MODEL = "moonshotai/kimi-k2-instruct-0905"
+# Fallback models (if Groq fails or rate limited)
+LLM_FALLBACK = "llama-3.1-70b-versatile" # Good alternative on Groq
+LLM_FALLBACK_2 = "mixtral-8x7b-32768"
+
+# TTS (text-to-speech) — HF endpoints are flaky/410, using gTTS as primary backup logic
+TTS_MODEL = "" 
+TTS_API_URL = ""
+TTS_FALLBACK = "" 
+TTS_FALLBACK_2 = ""
 
 # Image generation (Flux 2 is paid, fallback to SD v1.5 for free tier)
-IMAGE_MODEL = "runwayml/stable-diffusion-v1-5" 
+# Image generation (Flux 1 Schnell is fast and high quality)
+IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell" 
 IMAGE_STYLE_SUFFIX = "cinematic lighting, realistic, 4k, detailed, dramatic angle"
 IMAGE_NEGATIVE_PROMPT = "blur, haze, deformed, ugly, cartoon, anime, text, watermark"
-IMAGE_FALLBACK = "CompVis/stable-diffusion-v1-4"
-IMAGE_FALLBACK_2 = "prompthero/openjourney"
+IMAGE_FALLBACK = "stabilityai/stable-diffusion-xl-base-1.0"
+IMAGE_FALLBACK_2 = "stabilityai/stable-diffusion-2-1"
 
 # TTS Fallback flags
 ENABLE_GTTS_FALLBACK = True
@@ -80,11 +107,15 @@ FOLLOWUP_MAX_AGE_HOURS = 72       # Don't follow up on stories older than this
 MAX_FOLLOWUPS_PER_CYCLE = 2       # Max follow-up videos per cycle
 
 # ─── Video Config ────────────────────────────────────────
+# ─── Video Config ────────────────────────────────────────
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 VIDEO_FPS = 30
 ZOOM_FACTOR = 1.15                 # Ken Burns: zoom from 1.0 to this
-CROSSFADE_DURATION = 0.3           # Seconds of crossfade between scenes
+CROSSFADE_DURATION = 0.0           # 0.0 for hard cuts (fast pacing)
+
+# SFX Config
+SFX_DIR = BASE_DIR / "media" / "sfx"
 
 # Caption style
 CAPTION_FONT_SIZE = 60
@@ -97,12 +128,6 @@ CAPTION_POSITION = ("center", 0.80)  # 80% down the screen
 # ─── Scheduler Config ───────────────────────────────────
 CYCLE_INTERVAL_HOURS = 3           # Run pipeline every N hours
 MAX_VIDEOS_PER_CYCLE = 5           # Cap videos per cycle to save credits
-
-# ─── HF API Config ──────────────────────────────────────
-# HF migrated from api-inference.huggingface.co (410 Gone) → router.huggingface.co
-HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
-HF_API_TIMEOUT = 180               # Seconds to wait for HF model response (K2.5 needs more)
-HF_MAX_RETRIES = 3                 # Retry failed API calls
 
 # ─── Image Prompt Guidelines ────────────────────────────
 # These are appended to every image generation prompt for consistency

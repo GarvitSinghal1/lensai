@@ -17,13 +17,19 @@ from utils.hf_client import call_hf_llm
 SYSTEM_PROMPT_FRESH = """You are Lens AI, a viral short-form news video scripter. You write scripts for 30-45 second vertical videos (YouTube Shorts / Instagram Reels). Your scripts must be:
 
 STYLE RULES:
+- **RAPID FIRE PACING**: Scenes must be SHORT (2-5 seconds). speed is key.
 - Open with a HOOK that stops the scroll (question, shocking stat, bold claim)
 - Every sentence must earn its place — no filler, no fluff
 - Use conversational, slightly dramatic tone (like you're telling a friend something wild)
 - End with a KICKER that makes viewers want to share or comment
 - NO hashtags, NO "like and subscribe", NO emojis in the narration text
 - Write for SPOKEN delivery — short sentences, natural pauses
-- Each scene = 5-10 seconds of narration MAXIMUM
+- **Aim for 8-12 scenes** for a 40s video.
+
+EFFECTS & MEDIA:
+- `audio_effect`: Choose ONE from ["whoosh", "boom", "ding", "camera_shutter", "glitch", "none"] per scene. Use "whoosh" for transitions, "boom" for impact, "camera_shutter" for photos.
+- `visual_effect`: Choose ONE from ["zoom_fast", "zoom_slow", "pan_left", "pan_right", "shake", "flash", "none"].
+- `image_prompt`: Detailed, cinematic, vertical 9:16.
 
 IMAGE PROMPT RULES:
 - Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
@@ -35,13 +41,18 @@ IMAGE PROMPT RULES:
 SYSTEM_PROMPT_FOLLOWUP = """You are Lens AI, a viral short-form news video scripter creating a FOLLOW-UP video on a developing story. Viewers may have seen the original coverage.
 
 FOLLOW-UP RULES:
+- **RAPID FIRE PACING**: Scenes must be SHORT (2-5 seconds).
 - Open with "Remember [brief recap]? Here's what just happened..."
 - Highlight what CHANGED since the last video
 - Compare new info vs what was previously known
 - If the story evolved, explain the twist
 - End with forward-looking speculation or what to watch for next
 - Keep it under 45 seconds — viewers know the backstory
-- Reference the original facts briefly but don't repeat the whole story
+- **Aim for 8-12 scenes** for a 40s video.
+
+EFFECTS & MEDIA:
+- `audio_effect`: ["whoosh", "boom", "ding", "camera_shutter", "glitch", "none"].
+- `visual_effect`: ["zoom_fast", "zoom_slow", "pan_left", "pan_right", "shake", "flash", "none"].
 
 IMAGE PROMPT RULES:
 - Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
@@ -78,14 +89,16 @@ KEY DETAILS:
 
 Story severity: {severity}
 
-Respond with ONLY a JSON array of 4-5 scenes:
+Respond with ONLY a JSON array of 8-12 scenes:
 [
   {{
     "scene_number": 1,
-    "scene_type": "hook|context|facts|twist|kicker",
-    "narration": "The exact words to speak (5-10 seconds worth, ~15-25 words)",
-    "image_prompt": "Detailed cinematic image prompt for this scene (40+ words, describe composition, lighting, mood, colors, no text/logos)",
-    "estimated_duration": 7
+    "scene_type": "hook",
+    "narration": "The exact words to speak (2-5 seconds worth)",
+    "image_prompt": "Detailed cinematic image prompt...",
+    "audio_effect": "whoosh|boom|ding|camera_shutter|glitch|none",
+    "visual_effect": "zoom_fast|shake|flash|none",
+    "estimated_duration": 4
   }}
 ]"""
     
@@ -114,14 +127,16 @@ Topic: {topic}
 New information:
 {chr(10).join(f"- {f}" for f in facts[:6]) if facts else "- Story is still developing"}
 
-Respond with ONLY a JSON array of 4-5 scenes:
+Respond with ONLY a JSON array of 8-12 scenes:
 [
   {{
     "scene_number": 1,
-    "scene_type": "recap|update|new_facts|twist|kicker",
-    "narration": "The exact words to speak (5-10 seconds worth, ~15-25 words)",
-    "image_prompt": "Detailed cinematic image prompt (40+ words, photorealistic, 9:16 vertical, no text/logos)",
-    "estimated_duration": 7
+    "scene_type": "recap",
+    "narration": "The exact words to speak (2-5 seconds worth)",
+    "image_prompt": "Detailed cinematic image prompt...",
+    "audio_effect": "whoosh|boom|ding|camera_shutter|glitch|none",
+    "visual_effect": "zoom_fast|shake|flash|none",
+    "estimated_duration": 4
   }}
 ]
 
@@ -230,7 +245,9 @@ def _validate_scenes(scenes: list[dict]) -> list[dict]:
             "image_prompt": scene.get("image_prompt", 
                 f"Cinematic news visual depicting: {narration[:100]}. "
                 "Photorealistic, dramatic lighting, 9:16 vertical, editorial quality"),
-            "estimated_duration": min(max(scene.get("estimated_duration", 7), 3), 12),
+            "audio_effect": scene.get("audio_effect", "none"),
+            "visual_effect": scene.get("visual_effect", "none"),
+            "estimated_duration": min(max(scene.get("estimated_duration", 3), 2), 8),
         }
         valid.append(clean_scene)
     
