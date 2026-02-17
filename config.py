@@ -6,18 +6,50 @@ Loads environment variables and defines all constants.
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
-
-# Load .env
-load_dotenv()
-
 # ─── Paths ───────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "output"
-TEMP_DIR = BASE_DIR / "temp"
-DB_DIR = BASE_DIR / "db"
+OUTPUT_DIR = BASE_DIR / "video_creation" / "output"
+TEMP_DIR = BASE_DIR / "video_creation" / "temp"
+DB_DIR = BASE_DIR / "collection" / "db"
 DB_PATH = Path(os.getenv("DB_PATH_OVERRIDE")) if os.getenv("DB_PATH_OVERRIDE") else DB_DIR / "news.db"
-HISTORY_DIR = BASE_DIR / "history"  # Stores past topic analyses for follow-ups
+HISTORY_DIR = BASE_DIR / "collection" / "history"
+
+# Load .env (explicit path)
+from dotenv import load_dotenv
+env_path = BASE_DIR / ".env"
+try:
+    load_dotenv(dotenv_path=env_path, verbose=True)
+except Exception as e:
+    print(f"DEBUG: Could not load .env file via dotenv: {e}")
+
+# Manual fallback for .env loading (if dotenv fails)
+if not os.getenv("HF_TOKEN"):
+    print("DEBUG: Attempting manual .env parsing (fallback)...")
+    try:
+        env_content = env_path.read_text()
+        for line in env_content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            # Remove quotes if present
+            if v.startswith('"') and v.endswith('"'):
+                v = v[1:-1]
+            if v.startswith("'") and v.endswith("'"):
+                v = v[1:-1]
+            os.environ[k] = v
+        print("DEBUG: Manual .env parsing successful.")
+    except Exception as e:
+        print(f"DEBUG: Manual .env parsing failed: {e}")
+
+# Debug: Print loaded keys (masked)
+print(f"DEBUG: Loading .env from {env_path}")
+print("DEBUG: Loaded Environment Variables:")
+for key in os.environ:
+    if "HF_TOKEN" in key or "GROQ" in key:
+        val = os.environ[key]
+        masked = val[:4] + "..." + val[-4:] if len(val) > 8 else "***"
+        print(f"  {key}: {masked}")  # Stores past topic analyses for follow-ups
 
 # Create directories
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -38,8 +70,8 @@ if _primary:
 # 2. Additional numbered keys (HF_TOKEN_1 ... HF_TOKEN_10 OR HF_TOKEN1 ... HF_TOKEN10)
 for i in range(1, 11):
     _token = os.getenv(f"HF_TOKEN_{i}") or os.getenv(f"HF_TOKEN{i}")
-    if _token and _token not in HF_TOKENS:
-        HF_TOKENS.append(_token)
+    if _token and _token.strip() and _token not in HF_TOKENS:
+        HF_TOKENS.append(_token.strip())
 
 if not HF_TOKENS:
     HF_TOKENS = [""] # Fallback to empty string if no keys found
@@ -63,8 +95,8 @@ LLM_MODEL = "moonshotai/kimi-k2-instruct-0905"
 LLM_FALLBACK = "llama-3.1-70b-versatile" # Good alternative on Groq
 LLM_FALLBACK_2 = "mixtral-8x7b-32768"
 
-# TTS (text-to-speech) — HF endpoints are flaky/410, using gTTS as primary backup logic
-TTS_MODEL = "" 
+# TTS (text-to-speech) — Using Kokoro-82M via Replicate provider
+TTS_MODEL = "hexgrad/Kokoro-82M" 
 TTS_API_URL = ""
 TTS_FALLBACK = "" 
 TTS_FALLBACK_2 = ""
@@ -102,8 +134,8 @@ SCRIPT_STYLE = "punchy"            # Hook → facts → kicker style
 # ─── History / Follow-up Config ──────────────────────────
 ENABLE_FOLLOWUPS = True            # Generate follow-up videos on developing stories
 FOLLOWUP_SIMILARITY_THRESHOLD = 0.75  # Topic must be this similar to trigger follow-up
-FOLLOWUP_MIN_AGE_HOURS = 6        # Must be at least this old to follow up
-FOLLOWUP_MAX_AGE_HOURS = 72       # Don't follow up on stories older than this
+FOLLOWUP_MIN_AGE_HOURS = 12        # Must be at least this old to follow up
+FOLLOWUP_MAX_AGE_HOURS = 720       # Don't follow up on stories older than this
 MAX_FOLLOWUPS_PER_CYCLE = 2       # Max follow-up videos per cycle
 
 # ─── Video Config ────────────────────────────────────────
@@ -115,7 +147,7 @@ ZOOM_FACTOR = 1.15                 # Ken Burns: zoom from 1.0 to this
 CROSSFADE_DURATION = 0.0           # 0.0 for hard cuts (fast pacing)
 
 # SFX Config
-SFX_DIR = BASE_DIR / "media" / "sfx"
+SFX_DIR = BASE_DIR / "video_creation" / "media" / "sfx"
 
 # Caption style
 CAPTION_FONT_SIZE = 60

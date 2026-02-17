@@ -14,14 +14,14 @@ import config
 from utils.logger import log
 from utils.dedup import DedupDB
 from utils.history import TopicHistory
-from scraper.feed_scraper import scrape_all_feeds
-from scraper.article_extractor import extract_articles_batch
-from clustering.topic_clusterer import cluster_articles, filter_single_source_topics
-from analysis.cross_reference import cross_reference_articles
-from analysis.script_generator import generate_script
-from media.tts_engine import generate_tts_for_scenes
-from media.image_generator import generate_images_for_scenes
-from video.composer import compose_video
+from collection.scraper.feed_scraper import scrape_all_feeds
+from collection.scraper.article_extractor import extract_articles_batch
+from analysis_layer.clustering.topic_clusterer import cluster_articles, filter_single_source_topics
+from analysis_layer.analysis.cross_reference import cross_reference_articles
+from analysis_layer.analysis.script_generator import generate_script
+from video_creation.media.tts_engine import generate_tts_for_scenes
+from video_creation.media.image_generator import generate_images_for_scenes
+from video_creation.video.composer import compose_video
 
 
 def _slugify(text: str) -> str:
@@ -93,7 +93,7 @@ def run_cycle() -> dict:
     
     # Generate interactive visualization
     try:
-        from clustering import visualizer
+        from analysis_layer.clustering import visualizer
         viz_path = config.OUTPUT_DIR / "clusters.html"
         visualizer.save_interactive_visualization(clusters, viz_path)
     except Exception as e:
