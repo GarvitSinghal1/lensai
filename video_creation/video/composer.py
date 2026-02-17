@@ -321,7 +321,7 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
                 try:
                     sfx_audio = AudioFileClip(str(sfx_path))
                     # Lower volume for SFX so narration is clear
-                    sfx_audio = sfx_audio.with_volume_scaled(0.6)
+                    sfx_audio = sfx_audio.with_volume_scaled(0.10)
                     # SFX usually starts at 0, or maybe slight offset? Start at 0 for punchiness.
                     audio_clips.append(sfx_audio)
                 except Exception as e:

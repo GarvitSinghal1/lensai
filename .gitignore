@@ -36,3 +36,4 @@ repo/
 # Pip target install directory
 lib/
 history/
+*.db

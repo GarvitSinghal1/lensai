@@ -282,8 +282,12 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
     else:
         output_path = Path(output_path).with_suffix('.wav')
         
+    
     if not _save_audio(audio_bytes, output_path):
         return None
+    
+    # Speed up audio by 1.5x using ffmpeg (atempo)
+    _speed_up_file(output_path, speed=1.5)
     
     # Get duration
     duration = _get_audio_duration(output_path)
@@ -294,6 +298,38 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
         "audio_path": str(output_path),
         "duration_seconds": duration,
     }
+
+
+def _speed_up_file(file_path: Path, speed: float = 1.5):
+    """Speed up audio file using ffmpeg atempo filter (preserves pitch)."""
+    if speed == 1.0:
+        return
+
+    try:
+        import subprocess
+        import shutil
+        
+        temp_path = file_path.with_suffix(f".fast{file_path.suffix}")
+        
+        # ffmpeg -y -i input -filter:a "atempo=1.5" output
+        cmd = [
+            "ffmpeg", "-y", "-i", str(file_path),
+            "-filter:a", f"atempo={speed}",
+            str(temp_path)
+        ]
+        
+        # Suppress output
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        
+        if temp_path.exists() and temp_path.stat().st_size > 0:
+            shutil.move(temp_path, file_path)
+            log.info(f"Sped up audio {file_path.name} by {speed}x")
+        else:
+            log.warning(f"Speedup failed: temp file missing or empty for {file_path.name}")
+            
+    except Exception as e:
+        log.warning(f"Failed to speed up audio: {e}")
+
 
 
 def generate_tts_for_scenes(scenes: list[dict], temp_dir: Path) -> list[dict]:
