@@ -48,7 +48,27 @@ def _find_system_font() -> str:
     return "Helvetica"
 
 
-SYSTEM_FONT = _find_system_font()
+def _find_font_for_lang(lang: str = "en") -> str:
+    """Find a suitable system font for a specific language."""
+    if lang == "hi":
+        hindi_fonts = [
+            # macOS
+            "/System/Library/Fonts/KohinoorDevanagari.ttc",
+            "/System/Library/Fonts/Supplemental/DevanagariMT.ttc",
+            "/System/Library/Fonts/Supplemental/Nirmala.ttc",
+            # Linux
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf", # often has wide coverage
+        ]
+        for path in hindi_fonts:
+            if os.path.exists(path):
+                return path
+        # Fallback to system font if no specific Hindi font found (might fail to render)
+        return _find_system_font()
+
+    return _find_system_font()
+
+SYSTEM_FONT = _find_system_font() # Default
 
 
 # ─── Ken Burns Effect ────────────────────────────────────
@@ -153,7 +173,7 @@ def apply_ken_burns(image_path: str, duration: float, zoom_start: float = 1.0,
 # ─── Caption Generation (PIL-based for reliability) ──────
 
 def _render_caption_frame(text: str, highlight_word_idx: int,
-                           words: list, video_size: tuple) -> np.ndarray:
+                           words: list, video_size: tuple, font_path: str = None) -> np.ndarray:
     """Render a caption frame using PIL (more reliable than TextClip)."""
     w, h = video_size
     # Create transparent-ish overlay
@@ -161,7 +181,18 @@ def _render_caption_frame(text: str, highlight_word_idx: int,
     draw = ImageDraw.Draw(img)
 
     try:
-        font = ImageFont.truetype(SYSTEM_FONT, config.CAPTION_FONT_SIZE)
+        # Use provided font path or default
+        f_path = font_path or SYSTEM_FONT
+        
+        # Adjust font size for Hindi? (Devanagari often looks smaller)
+        # Check if Hindi font
+        is_hindi = "Devanagari" in f_path or "Nirmala" in f_path
+        size = config.CAPTION_FONT_SIZE
+        if is_hindi:
+             size = int(size * 0.9) # Slightly smaller to avoid vertical clipping? Or larger?
+             # Actually Devanagari has tall ascenders/descenders.
+             
+        font = ImageFont.truetype(f_path, size)
     except (OSError, IOError):
         font = ImageFont.load_default()
 
@@ -199,7 +230,7 @@ def _render_caption_frame(text: str, highlight_word_idx: int,
 
 
 def create_caption_clips(narration: str, duration: float,
-                          video_size: tuple = None) -> list:
+                          video_size: tuple = None, lang: str = "en") -> list:
     """
     Create word-by-word highlighted caption clips using PIL rendering.
     Shows groups of 4 words at a time with the current word highlighted.
@@ -208,6 +239,10 @@ def create_caption_clips(narration: str, duration: float,
         return []
 
     video_size = video_size or (config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
+    
+    # Resolve font for language
+    font_path = _find_font_for_lang(lang)
+    
     words = narration.split()
 
     if not words:
@@ -232,7 +267,7 @@ def create_caption_clips(narration: str, duration: float,
                 # Render caption frame with PIL
                 frame = _render_caption_frame(
                     " ".join(group_words), word_offset,
-                    group_words, video_size
+                    group_words, video_size, font_path=font_path
                 )
 
                 clip = ImageClip(frame)
@@ -252,7 +287,7 @@ def create_caption_clips(narration: str, duration: float,
 
 # ─── Visual Overlays ──────────────────────────────────────
 
-def create_lower_third(headline: str, duration: float) -> Optional[VideoClip]:
+def create_lower_third(headline: str, duration: float, lang: str = "en") -> Optional[VideoClip]:
     """Create a professional lower-third headline overlay."""
     if not headline:
         return None
@@ -269,7 +304,8 @@ def create_lower_third(headline: str, duration: float) -> Optional[VideoClip]:
 
     # Text
     try:
-        font = ImageFont.truetype(SYSTEM_FONT, 50)
+        font_path = _find_font_for_lang(lang)
+        font = ImageFont.truetype(font_path, 50)
     except:
         font = ImageFont.load_default()
     
@@ -346,6 +382,7 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
     headline = scene.get("headline", "")
     visual_effect = scene.get("visual_effect", "none")
     audio_effect = scene.get("audio_effect", "none")
+    lang = scene.get("lang", "en") # Get language from scene
     
     duration = scene.get("actual_duration", scene.get("estimated_duration", 5.0))
 
@@ -373,14 +410,15 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
 
         # Add Lower Third (if headline exists)
         if headline:
-            lower_third = create_lower_third(headline, duration)
+            lower_third = create_lower_third(headline, duration, lang=lang)
             if lower_third:
                 layers.append(lower_third)
 
         # Add captions
         caption_clips = create_caption_clips(
             narration, duration,
-            (config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
+            (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
+            lang=lang
         )
         layers.extend(caption_clips)
 

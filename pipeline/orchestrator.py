@@ -315,23 +315,63 @@ def _process_single_topic(cluster: dict, temp_dir: Path,
 
     # Step 8: Generate images for each scene
     log.info(f"  🎨 [{prefix}] Using scraped visuals ({len(article_images)} available)...")
-    scenes = generate_images_for_scenes(scenes, temp_dir, article_images)
+    
+    # Generate images for English scenes first
+    scenes_en = generate_images_for_scenes(scenes, temp_dir, article_images)
     
     # Filter scenes with both audio and image
-    valid_scenes = [
-        s for s in scenes
+    valid_scenes_en = [
+        s for s in scenes_en
         if s.get("audio_path") and s.get("image_path")
     ]
     
-    if not valid_scenes:
-        log.error("  No valid scenes (missing audio or images)")
-        return None
-    
-    # Step 9: Compose video
-    prefix_tag = "followup" if is_followup else "lens_ai"
-    output_path = config.OUTPUT_DIR / f"{prefix_tag}_{timestamp}_{topic_slug}.mp4"
-    
-    log.info(f"  🎬 [{prefix}] Composing video from {len(valid_scenes)} scenes...")
-    video_path = compose_video(valid_scenes, str(output_path))
-    
-    return video_path
+    video_path_en = None
+    if valid_scenes_en:
+        # Step 9a: Compose English Video
+        prefix_tag = "followup" if is_followup else "lens_ai"
+        output_path_en = config.OUTPUT_DIR / f"{prefix_tag}_{timestamp}_{topic_slug}_EN.mp4"
+        
+        log.info(f"  🎬 [{prefix}] Composing ENGLISH video...")
+        video_path_en = compose_video(valid_scenes_en, str(output_path_en))
+    else:
+        log.error("  No valid English scenes (missing audio or images)")
+
+    # ── Step 10: Multilingual Generation (Hindi) ───────────
+    video_path_hi = None
+    try:
+        from analysis_layer.analysis.script_generator import translate_script
+        
+        log.info(f"  🌐 [{prefix}] Starting Hindi generation...")
+        
+        # 1. Translate Script
+        # Use the original 'scenes' (before TTS/Image generation modified them? No, use valid_scenes_en to keep image paths!)
+        # valid_scenes_en has 'image_path'. We want to REUSE that.
+        if valid_scenes_en:
+            scenes_hi = translate_script(valid_scenes_en, target_lang="hi")
+            
+            if scenes_hi:
+                # 2. Generate Hindi TTS
+                log.info(f"  🎙️  [{prefix}] Generating Hindi voiceover...")
+                # Update scenes with new audio paths, keeping image paths
+                scenes_hi = generate_tts_for_scenes(scenes_hi, temp_dir, lang="hi")
+                
+                # 3. specific lang tag for composer
+                for s in scenes_hi:
+                    s["lang"] = "hi"
+                
+                # 4. Compose Hindi Video
+                output_path_hi = config.OUTPUT_DIR / f"{prefix_tag}_{timestamp}_{topic_slug}_HI.mp4"
+                log.info(f"  🎬 [{prefix}] Composing HINDI video...")
+                video_path_hi = compose_video(scenes_hi, str(output_path_hi))
+                if video_path_hi:
+                    log.info(f"✅ HINDI Video complete: {video_path_hi}")
+            else:
+                 log.warning("  Hindi translation failed.")
+    except Exception as e:
+        log.error(f"  Hindi generation failed: {e}")
+
+    # Return primary video path (English) for stats/history, or Hindi if EN failed?
+    # Stats expects one path usually, but we can return list?
+    # run_cycle expects a single string or potentially list. 
+    # Let's return English path as primary.
+    return video_path_en

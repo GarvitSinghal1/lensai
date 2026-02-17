@@ -202,7 +202,7 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
     
     log.info(f"Generating TTS ({len(text)} chars): \"{text[:60]}...\"")
     
-def _generate_gtts(text: str) -> Optional[bytes]:
+def _generate_gtts(text: str, lang: str = "en") -> Optional[bytes]:
     """Fallback to Google TTS (gTTS). Free and higher quality than local system TTS."""
     if not hasattr(config, "ENABLE_GTTS_FALLBACK") or not config.ENABLE_GTTS_FALLBACK:
         return None
@@ -210,9 +210,6 @@ def _generate_gtts(text: str) -> Optional[bytes]:
     try:
         from gtts import gTTS
         import io
-        
-        # Determine language (default en)
-        lang = "en"
         
         tts = gTTS(text=text, lang=lang, slow=False)
         mp3_io = io.BytesIO()
@@ -234,10 +231,21 @@ def _generate_gtts(text: str) -> Optional[bytes]:
         
     return None
 
-def generate_tts(text: str, output_path: Path) -> Optional[dict]:
+    return {
+        "audio_path": str(output_path),
+        "duration_seconds": duration,
+    }
+
+
+def generate_tts(text: str, output_path: Path, lang: str = "en") -> Optional[dict]:
     """
     Generate TTS audio for a given text.
     
+    Args:
+        text: Text to speak
+        output_path: Path to save audio
+        lang: Language code ('en', 'hi', etc.)
+        
     Returns:
         dict with 'audio_path' and 'duration_seconds', or None on failure.
     """
@@ -245,21 +253,36 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
         log.warning("Empty text provided to TTS")
         return None
     
-    log.info(f"Generating TTS ({len(text)} chars): \"{text[:60]}...\"")
+    log.info(f"Generating TTS ({lang}, {len(text)} chars): \"{text[:60]}...\"")
     
-    # 0. Specialized High-Quality TTS (Kokoro-82M via Replicate)
-    audio_bytes = _generate_kokoro_tts(text)
+    audio_bytes = None
+    
+    # Logic for Hindi
+    if lang == "hi":
+        # For Hindi, prioritize gTTS as Kokoro/HF models might not support Devanagari well yet
+        log.info("Language is Hindi. Using gTTS directly.")
+        audio_bytes = _generate_gtts(text, lang="hi")
+        
+    else:
+        # Default English Logic
+        # 0. Specialized High-Quality TTS (Kokoro-82M via Replicate)
+        # Verify if Kokoro supports the requested lang? Currently mostly English.
+        if lang == "en":
+            audio_bytes = _generate_kokoro_tts(text)
 
-    # 1. Use centralized HF client (MMS -> SpeechT5) if Kokoro fails
-    if not audio_bytes:
-        audio_bytes = hf_client.generate_audio(text)
+        # 1. Use centralized HF client (MMS -> SpeechT5) if Kokoro fails
+        if not audio_bytes:
+            # Check if hf_client supports lang? It defaults to English usually.
+            # Only use HF for EN for now to avoid weird accents.
+            if lang == "en":
+                audio_bytes = hf_client.generate_audio(text)
+        
+        # 2. Fallback: Google TTS (gTTS)
+        if not audio_bytes:
+            audio_bytes = _generate_gtts(text, lang=lang)
     
-    # 2. Fallback: Google TTS (gTTS)
-    if not audio_bytes:
-        audio_bytes = _generate_gtts(text)
-    
-    # 3. Final fallback: Local System TTS (Mac only)
-    if not audio_bytes:
+    # 3. Final fallback: Local System TTS (Mac only) - English only usually
+    if not audio_bytes and lang == "en":
         log.warning("All HF/Google TTS models failed, trying local system TTS...")
         audio_bytes = _generate_local_tts(text)
     
@@ -287,7 +310,11 @@ def generate_tts(text: str, output_path: Path) -> Optional[dict]:
         return None
     
     # Speed up audio by 1.5x using ffmpeg (atempo)
-    _speed_up_file(output_path, speed=1.5)
+    # Only for English? Hindi might be too fast if sped up.
+    # Let's speed up Hindi only 1.3x? Or keep 1.5x?
+    # gTTS is slow. 1.5x is usually good.
+    speed = 1.3 if lang == 'hi' else 1.5
+    _speed_up_file(output_path, speed=speed)
     
     # Get duration
     duration = _get_audio_duration(output_path)
@@ -332,7 +359,7 @@ def _speed_up_file(file_path: Path, speed: float = 1.5):
 
 
 
-def generate_tts_for_scenes(scenes: list[dict], temp_dir: Path) -> list[dict]:
+def generate_tts_for_scenes(scenes: list[dict], temp_dir: Path, lang: str = "en") -> list[dict]:
     """
     Generate TTS audio for all scenes in a script.
     
@@ -349,8 +376,8 @@ def generate_tts_for_scenes(scenes: list[dict], temp_dir: Path) -> list[dict]:
         if not narration:
             continue
         
-        audio_file = temp_dir / f"scene_{i:02d}.wav"
-        result = generate_tts(narration, audio_file)
+        audio_file = temp_dir / f"scene_{i:02d}_{lang}.wav"
+        result = generate_tts(narration, audio_file, lang=lang)
         
         if result:
             scene_copy = scene.copy()

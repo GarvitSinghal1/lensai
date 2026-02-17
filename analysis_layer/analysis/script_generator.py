@@ -313,3 +313,70 @@ def _fallback_script(analysis: dict, is_followup: bool = False) -> list[dict]:
     ]
     
     return scenes
+    
+
+def translate_script(scenes: list[dict], target_lang: str = "hi") -> Optional[list[dict]]:
+    """
+    Translate the narration and headlines of a script to a target language.
+    Keeps all other fields (image_prompt, effects, etc.) identical.
+    """
+    if not scenes:
+        return None
+        
+    log.info(f"Translating script to '{target_lang}'...")
+    
+    # Prepare JSON for translation
+    # We only need to translate 'narration' and 'headline'
+    to_translate = []
+    for s in scenes:
+        to_translate.append({
+            "id": s.get("scene_number"),
+            "narration": s.get("narration"),
+            "headline": s.get("headline")
+        })
+        
+    prompt = f"""You are a professional news translator. Translate the following JSON content to Hindi (Devanagari script).
+    
+RULES:
+1. Translate 'narration' to natural, spoken Hindi suitable for news.
+2. Translate 'headline' to punchy Hindi news headlines.
+3. KEEP 'id' exactly the same.
+4. Output ONLY the JSON array.
+
+CONTENT:
+{json.dumps(to_translate, indent=2)}
+"""
+
+    response = call_hf_llm(prompt, max_tokens=2000, temperature=0.3)
+    if not response:
+        log.error("Translation LLM failed.")
+        return None
+        
+    # Parse
+    translated_data = _parse_scenes(response) # Reuse parser as it handles JSON arrays
+    if not translated_data:
+        log.error("Failed to parse translation response.")
+        return None
+        
+    # Merge back
+    translated_scenes = []
+    try:
+        # Create a lookup for translated items
+        trans_map = {item["id"]: item for item in translated_data if "id" in item}
+        
+        for scene in scenes:
+            new_scene = scene.copy()
+            # Get translation
+            trans = trans_map.get(scene.get("scene_number"))
+            if trans:
+                new_scene["narration"] = trans.get("narration", scene["narration"])
+                # Ensure headline is short
+                new_scene["headline"] = trans.get("headline", scene["headline"])
+            
+            translated_scenes.append(new_scene)
+            
+        return translated_scenes
+        
+    except Exception as e:
+        log.error(f"Error merging translation: {e}")
+        return None

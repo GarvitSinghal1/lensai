@@ -79,8 +79,8 @@ if not HF_TOKENS:
 HF_API_KEY = HF_TOKENS[0] # Default to first key for legacy compatibility
 
 # ─── HF API Config ──────────────────────────────────────
-# Standard Inference API (router didn't work for MMS/SpeechT5)
-HF_API_BASE = "https://api-inference.huggingface.co/models"
+# Standard Inference API (Updated to new Router endpoint)
+HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_API_TIMEOUT = 180               # Seconds to wait for HF model response (K2.5 needs more)
 HF_MAX_RETRIES = 3                 # Retry failed API calls
 
@@ -101,17 +101,12 @@ TTS_API_URL = ""
 TTS_FALLBACK = "" 
 TTS_FALLBACK_2 = ""
 
-# Image generation (Flux 2 is paid, fallback to SD v1.5 for free tier)
-# Image generation (Flux 1 Schnell is fast and high quality)
-IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell" 
-IMAGE_STYLE_SUFFIX = "cinematic lighting, realistic, 4k, detailed, dramatic angle"
-IMAGE_NEGATIVE_PROMPT = "blur, haze, deformed, ugly, cartoon, anime, text, watermark"
+# Image generation
+# Switched to reliable "warm" models on Hugging Face Router
+IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0" 
+IMAGE_FALLBACK = "runwayml/stable-diffusion-v1-5"
+IMAGE_FALLBACK_2 = "ByteDance/SDXL-Lightning"
 
-# Models
-# New request: tencent/HunyuanImage-3.0 via Replicate provider
-IMAGE_MODEL = "tencent/HunyuanImage-3.0"
-IMAGE_FALLBACK = "black-forest-labs/FLUX.1-schnell"
-IMAGE_FALLBACK_2 = "stabilityai/stable-diffusion-2-1"
 
 # TTS Fallback flags
 ENABLE_GTTS_FALLBACK = True
