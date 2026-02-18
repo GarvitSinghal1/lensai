@@ -24,9 +24,13 @@ Lens AI is a **zero-human-intervention** pipeline that automatically:
 1. **Scrapes** 22 RSS feeds from BBC, Reuters, CNN, Al Jazeera, Times of India, The Guardian, and more
 2. **Clusters** articles about the same story using local sentence embeddings
 3. **Cross-references** multiple sources with a Kimi K2.5–powered investigative AI — identifying consensus facts, disputed claims, and exaggerations
-4. **Writes scripts** in punchy 30–45 second short-form format (hook → context → facts → twist → kicker)
-5. **Generates voiceover** using Kokoro-82M TTS with word-level timestamps
-6. **Creates cinematic visuals** for each scene via FLUX.2-dev — #3 on HF image leaderboard (ELO 1209)
+4. **Writes scripts** with an **Anchor Persona** (Hook & Kicker)
+5. **Generates voiceover** using Kokoro-82M (English) or gTTS (Hindi)
+6. **Sources media** with a "Real-First" hierarchy:
+    - **Anchor Video**: Lip-synced avatar for intro/outro
+    - **Real News Images**: Scraped from source articles
+    - **Stock Video**: Pexels API (e.g. "traffic", "crowds")
+    - **AI Generation**: Fallback visuals via FLUX.2/SDXL
 7. **Assembles final videos** with Ken Burns zoom, word-by-word captions, and crossfade transitions
 8. **Detects developing stories** and auto-generates follow-up videos with historical context
 
@@ -71,46 +75,45 @@ All of this runs on the **free** Hugging Face Inference API.
 
 ## 📂 Project Structure
 
-```
 lensai/
 ├── main.py                    # Entry point + 3-hour scheduler
 ├── run.sh                     # Shell wrapper (sets PYTHONPATH)
+├── run_test.sh                # Test wrapper (loads .env safely)
 ├── config.py                  # All configuration in one place
 ├── requirements.txt           # Python dependencies
 │
-├── scraper/                   # News ingestion
-│   ├── rss_feeds.py           #   22 feeds: BBC, Reuters, CNN, Al Jazeera, etc.
-│   ├── feed_scraper.py        #   Parallel RSS fetcher
-│   └── article_extractor.py   #   Full text extraction (BeautifulSoup)
+├── collection/                # Data Ingestion
+│   ├── scraper/               #   News feed & article scraping
+│   ├── db/                    #   Database management
+│   └── history/               #   Topic tracking
 │
-├── clustering/                # Topic detection
-│   └── topic_clusterer.py     #   Agglomerative clustering + embeddings
+├── analysis_layer/            # Intelligent Analysis
+│   ├── clustering/            #   Topic clustering
+│   └── analysis/              #   LLM Script generation & cross-referencing
 │
-├── analysis/                  # AI brain
-│   ├── cross_reference.py     #   Multi-source fact analysis (Kimi K2.5)
-│   └── script_generator.py    #   Video script writer (fresh + follow-up)
-│
-├── media/                     # Asset generation
-│   ├── tts_engine.py          #   Voiceover (Kokoro-82M)
-│   └── image_generator.py     #   Scene visuals (FLUX.1-dev)
-│
-├── video/                     # Final assembly
-│   └── composer.py            #   Ken Burns + captions + transitions
+├── video_creation/            # Content Production
+│   ├── media/                 #   Asset generation (TTS, Image, Anchor)
+│   └── video/                 #   Composer & effects
 │
 ├── pipeline/                  # Orchestration
 │   └── orchestrator.py        #   End-to-end pipeline runner
 │
 ├── utils/                     # Shared utilities
-│   ├── logger.py              #   Console + file logging
-│   ├── dedup.py               #   SQLite deduplication
-│   ├── history.py             #   Topic history for follow-ups
-│   └── hf_client.py           #   Centralized LLM caller (3-model fallback)
+│   ├── stock_footage.py       #   Pexels API client
+│   ├── hf_client.py           #   Hugging Face API wrapper
+│   └── logger.py              #   Logging system
+│
+├── tests/                     # Unit tests & Debug scripts
+│   ├── test_tts.py
+│   ├── test_stock.py
+│   └── ...
+│
+├── tools/                     # One-off utility scripts
+│   └── generate_anchor.py
 │
 ├── output/                    # Generated videos land here
-├── db/                        # SQLite databases
-├── history/                   # Past topic analyses (JSON)
+├── logs/                      # Runtime logs
 └── lib/                       # pip --target dependencies
-```
 
 ---
 
@@ -131,8 +134,12 @@ Create a `.env` file in the project root:
 # Hugging Face API Key (Required)
 # Get one at: https://huggingface.co/settings/tokens
 HF_TOKEN=hf_your_token_here
-# Legacy key support also works:
-# hff_key=hf_your_token_here
+
+# Groq API Key (Recommended for faster TTS)
+GROQ_API_KEY=gsk_...
+
+# Pexels API Key (Optional, for Stock Video)
+PEXELS_API_KEY=...
 ```
 
 > **Troubleshooting:** If you get permission errors on MacOS/Google Drive, run:  
