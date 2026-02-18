@@ -6,9 +6,13 @@ Scrape -> Cluster -> Analyze -> Generate -> Assemble (+ Follow-ups)
 
 import shutil
 import time
-from datetime import datetime
+import requests
+from PIL import Image
+from io import BytesIO
+from video_creation.media import tts_engine
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import config
 from utils.logger import log
@@ -313,16 +317,139 @@ def _process_single_topic(cluster: dict, temp_dir: Path,
             seen_imgs.add(img)
     article_images = unique_images
 
-    # Step 8: Generate images for each scene
-    log.info(f"  🎨 [{prefix}] Using scraped visuals ({len(article_images)} available)...")
+    # Step 8: Generate images (or Anchor Video) for each scene
+    log.info(f"  🎨 [{prefix}] Generating visuals...")
     
     # Generate images for English scenes first
-    scenes_en = generate_images_for_scenes(scenes, temp_dir, article_images)
+    # Implementation detail: We iterate and check for 'is_anchor'
     
-    # Filter scenes with both audio and image
+    from video_creation.media import image_generator
+    from video_creation.media import lip_sync
+    import config
+    from utils.stock_footage import search_stock_video
+    
+    anchor_image_path = config.MEDIA_DIR / "anchor.png"
+    
+    for i, scene in enumerate(scenes):
+        scene_idx = i + 1
+        
+        # 1. Check for Anchor Mode
+        if scene.get("is_anchor"):
+            if anchor_image_path.exists():
+                log.info(f"    Scene {scene_idx}: Anchor mode active.")
+                # Try Lip Sync if audio exists
+                if scene.get("audio_path"):
+                    video_path = lip_sync.generate_lip_sync(
+                        Path(scene["audio_path"]), 
+                        anchor_image_path, 
+                        temp_dir / f"scene_{scene_idx}_anchor.mp4"
+                    )
+                    if video_path:
+                        scene["video_path"] = video_path
+                        scene["image_path"] = None 
+                        continue
+                
+                # Fallback to static image if lip sync fails or no audio
+                log.info(f"    Scene {scene_idx}: Using static Anchor image (Lip Sync unavailable/failed).")
+                scene["image_path"] = str(anchor_image_path)
+                continue
+            else:
+                log.warning(f"    Scene {scene_idx}: Anchor requested but 'anchor.png' missing! logic continues to other media.")
+
+        # 2. Scraped Image Strategy (for non-anchor scenes)
+        # [Existing logic for scraped images...]
+        if article_images:
+            # Try to get a valid image from the scraped list
+            # We explicitly want to use real news images first
+            try:
+                img_url = article_images.pop(0)
+                log.info(f"    Scene {scene_idx}: attempting to use news image: {img_url}")
+                
+                response = requests.get(img_url, timeout=5)
+                if response.status_code == 200:
+                    img = Image.open(BytesIO(response.content))
+                    
+                    # Convert to RGB (remove alpha/palettes)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                        
+                    # Crop to 9:16 aspect ratio (1080x1920 target, or just ratio)
+                    # Target aspect ratio
+                    target_ratio = 9/16
+                    img_ratio = img.width / img.height
+                    
+                    if img_ratio > target_ratio:
+                        # Image is too wide, need to crop width
+                        new_width = int(img.height * target_ratio)
+                        offset = (img.width - new_width) // 2
+                        img = img.crop((offset, 0, offset + new_width, img.height))
+                    else:
+                        # Image is too tall (unlikely for news), crop height
+                        new_height = int(img.width / target_ratio)
+                        offset = (img.height - new_height) // 2
+                        img = img.crop((0, offset, img.width, offset + new_height))
+                        
+                    # Resize to target resolution for consistency (optional but good)
+                    img = img.resize((1080, 1920), Image.Resampling.LANCZOS)
+                    
+                    # Save
+                    dest_path = temp_dir / f"scene_{scene_idx}_news.png"
+                    img.save(dest_path)
+                    
+                    scene["image_path"] = str(dest_path)
+                    log.info(f"    ✅ Used real news image for Scene {scene_idx}")
+                    continue
+                else:
+                    log.warning(f"    Failed to download news image (Status {response.status_code})")
+            except Exception as e:
+                log.warning(f"    Error processing news image: {e}")
+            
+            # Remove the 'pass' that caused indentation error
+            # If no image found/processed, we fall through to next strategy
+
+        # 3. Stock Video Strategy (B-Roll)
+        if scene.get("media_type") in ["stock_video", "video"]:
+            search_term = scene.get("stock_search_term") or scene.get("image_prompt") or scene.get("visual_description", "")
+            log.info(f"    Scene {scene_idx}: Searching stock video for '{search_term}'...")
+            
+            # Try to get a video
+            stock_path = search_stock_video(
+                query=search_term,
+                orientation="portrait", # Vertical video
+                duration_min=3
+            )
+            
+            if stock_path:
+                scene["video_path"] = str(stock_path)
+                scene["image_path"] = None # Video takes precedence
+                log.info(f"    ✅ Stock video found: {stock_path.name}")
+                continue
+            else:
+                log.info(f"    ⚠️ Stock video not found for '{search_term}', falling back to AI Image.")
+                # Fallback to AI image generation below
+        
+        # 4. AI Generation Strategy (Fallback or Primary)
+        # Prefer 'image_prompt' (new schema), fallback to 'visual_description' (old schema)
+        prompt = scene.get("image_prompt") or scene.get("visual_description", "")
+        
+        # Ensure pure description for image gen if prompt is missing
+        if not prompt:
+            log.warning(f"    Scene {scene_idx}: Empty prompt!")
+        
+        img_path = temp_dir / f"scene_{scene_idx}.png"
+        
+        generated = image_generator.generate_image(prompt, img_path)
+        if generated:
+            scene["image_path"] = generated
+        else:
+            log.warning(f"    Scene {scene_idx}: Image gen failed.")
+
+    scenes_en = scenes # Renamed for clarity logic below
+    
+    # Filter scenes with both audio and (image OR video)
     valid_scenes_en = [
         s for s in scenes_en
-        if s.get("audio_path") and s.get("image_path")
+        if s.get("audio_path") and (s.get("image_path") or s.get("video_path"))
     ]
     
     video_path_en = None

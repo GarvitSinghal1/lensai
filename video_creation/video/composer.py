@@ -19,7 +19,8 @@ from utils.logger import log
 # MoviePy v2 imports
 from moviepy import (
     ImageClip, AudioFileClip, CompositeVideoClip,
-    concatenate_videoclips, TextClip, ColorClip, VideoClip, vfx
+    concatenate_videoclips, TextClip, ColorClip, VideoClip, vfx,
+    VideoFileClip
 )
 
 
@@ -416,7 +417,8 @@ def compose_scene(scene: dict) -> Optional[CompositeVideoClip]:
 
         # Add captions
         caption_clips = create_caption_clips(
-            narration, duration,
+            scene.get("text", ""), 
+            duration, 
             (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
             lang=lang
         )
@@ -492,20 +494,9 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     log.info(f"Composing video from {len(scenes)} scenes...")
-
-    # Compose each scene
     scene_clips = []
-    for i, scene in enumerate(scenes):
-        log.info(f"  Composing scene {i+1}/{len(scenes)}: {scene.get('scene_type', 'unknown')}")
-        clip = compose_scene(scene)
-        if clip:
-            scene_clips.append(clip)
-        else:
-            log.warning(f"  Skipping scene {i+1} (composition failed)")
 
-    if not scene_clips:
-        log.error("No scenes could be composed")
-        return None
+
 
     # Create Outro Clip (Bonus Feature)
     try:
@@ -517,6 +508,61 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
         log.warning(f"Outro creation failed: {e}")
 
     try:
+        scene_clips = []
+        for i, scene in enumerate(scenes):
+            try:
+                # 1. Check for pre-rendered Video (Anchor/Intro)
+                video_path = scene.get("video_path")
+                if video_path and os.path.exists(video_path):
+                    log.info(f"Processing Anchor Video Scene {i+1}...")
+                    
+                    # Compute duration from audio or video
+                    audio_path = scene.get("audio_path")
+                    if audio_path and os.path.exists(audio_path):
+                        audio = AudioFileClip(audio_path)
+                        duration = audio.duration
+                    else:
+                        duration = VideoFileClip(video_path).duration
+                        
+                    # Load Video
+                    clip = VideoFileClip(video_path).resized(new_size=(config.VIDEO_WIDTH, config.VIDEO_HEIGHT))
+                    
+                    # Loop visual if audio is longer (common for short lip-sync clips)
+                    if clip.duration < duration:
+                         clip = vfx.loop(clip, duration=duration)
+                    else:
+                         clip = clip.with_duration(duration)
+                         
+                    # Attach specific audio if different from video's track
+                    if audio_path:
+                        clip = clip.with_audio(AudioFileClip(audio_path))
+                        
+                    # Add standard overlays (Ticker/Captions) if desired?
+                    # For now, let's keep Anchor "clean" or assume it has them?
+                    # Actually, Composer usually adds captions. Let's add captions.
+                    caption_clips = create_caption_clips(
+                        scene.get("text", ""), 
+                        duration, 
+                        (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
+                        lang=scene.get("lang", "en")
+                    )
+                    
+                    final_clip = CompositeVideoClip([clip, *caption_clips]).with_duration(duration)
+                    scene_clips.append(final_clip)
+                    continue
+
+                # 2. Standard Image Scene
+                clip = compose_scene(scene)
+                if clip:
+                    scene_clips.append(clip)
+            except Exception as e:
+                log.error(f"Failed to compose scene {i+1}: {e}")
+                continue
+
+        if not scene_clips:
+            log.error("No valid clips were created!")
+            return None
+
         # Concatenate scenes with crossfade
         if len(scene_clips) > 1 and config.CROSSFADE_DURATION > 0:
             final = concatenate_videoclips(
@@ -532,7 +578,7 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
 
         # Add "Lens AI" Logo Overlay (top-right corner)
         try:
-            from moviepy import ImageClip, CompositeVideoClip, vfx
+
             logo_path = Path("video_creation/media/logo.png")
             if logo_path.exists():
                 logo_clip = (
@@ -551,7 +597,7 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
         try:
             from PIL import Image, ImageDraw, ImageFont
             import numpy as np
-            from moviepy import VideoClip, ImageClip, CompositeVideoClip
+
 
             narration_text = "Breaking News"
             if scenes and len(scenes) > 0:
@@ -635,7 +681,7 @@ def compose_video(scenes: list[dict], output_path: str) -> Optional[str]:
 
         if bgm_path.exists():
             try:
-                from moviepy import AudioFileClip, CompositeAudioClip, afx
+                from moviepy import CompositeAudioClip, afx
                 
                 bgm = AudioFileClip(str(bgm_path))
                 # Loop BGM

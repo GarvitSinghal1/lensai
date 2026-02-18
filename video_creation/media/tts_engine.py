@@ -133,8 +133,87 @@ def _generate_local_tts(text: str) -> Optional[bytes]:
         
     return None
 
+    return None
+
+def _trim_silence(audio_bytes: bytes) -> bytes:
+    """Detect and remove leading silence from audio bytes using pydub."""
+    try:
+        from pydub import AudioSegment, silence
+        
+        # Load from bytes
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        
+        # Detect non-silent chunks
+        # seek_step=1 to be precise
+        start_trim = silence.detect_leading_silence(audio, silence_threshold=-40.0, chunk_size=10)
+        
+        if start_trim > 0:
+            log.info(f"Trimming {start_trim}ms of initial silence from Groq audio.")
+            trimmed_audio = audio[start_trim:]
+            
+            # Export back to bytes
+            out_io = io.BytesIO()
+            trimmed_audio.export(out_io, format="wav")
+            return out_io.getvalue()
+            
+        return audio_bytes
+        
+    except Exception as e:
+        log.warning(f"Silence trimming failed: {e}")
+        return audio_bytes
+
+def _generate_groq_tts(text: str) -> Optional[bytes]:
+    """Generate TTS using Groq Audio API."""
+    if not config.GROQ_API_KEY:
+        log.warning("GROQ_API_KEY not found. Skipping Groq TTS.")
+        return None
+        
+    try:
+        from groq import Groq
+        
+        client = Groq(api_key=config.GROQ_API_KEY)
+        
+        log.info(f"Calling Groq TTS ({config.GROQ_TTS_MODEL})...")
+        
+        # Groq API returns a stream or raw response.
+        # User snippet: response.stream_to_file(...) but we want bytes.
+        # The content is usually binary in the response.
+        
+        response = client.audio.speech.create(
+            model=config.GROQ_TTS_MODEL,
+            voice=config.GROQ_TTS_VOICE,
+            input=text,
+            response_format="wav" # Get WAV directly
+        )
+        
+        # Convert response content to bytes
+        # BinaryAPIResponse (httpx based?) likely supports .read() or .content if accessed differently
+        # Using .read() for safety with Groq's sync client
+        audio_bytes = response.read()
+        
+        if len(audio_bytes) > 1000:
+            log.info(f"Groq TTS successful ({len(audio_bytes)} bytes)")
+            # Trim silence
+            return _trim_silence(audio_bytes)
+        else:
+             log.warning("Groq TTS returned empty/small audio.")
+             
+    except Exception as e:
+        log.error(f"Groq TTS failed: {e}")
+        
+    return None
+
+def _strip_emotion_tags(text: str) -> str:
+    """Remove Orpheus emotion tags for fallback TTS models."""
+    import re
+    # Pattern to match <laugh>, <sigh>, etc.
+    # config.GROQ_EMOTION_TAGS has the list, but a generic regex is safer/faster
+    # Matches <word> where word is lowercase letters
+    return re.sub(r'<[a-z]+>', '', text).strip()
+
 def _generate_kokoro_tts(text: str) -> Optional[bytes]:
     """Generate TTS using Kokoro-82M model via Replicate provider on HF InferenceClient."""
+    text = _strip_emotion_tags(text) # Clean tags
     if "Kokoro" not in config.TTS_MODEL:
         return None
         
@@ -265,21 +344,30 @@ def generate_tts(text: str, output_path: Path, lang: str = "en") -> Optional[dic
         
     else:
         # Default English Logic
-        # 0. Specialized High-Quality TTS (Kokoro-82M via Replicate)
-        # Verify if Kokoro supports the requested lang? Currently mostly English.
+        
+        # 0. Primary: Groq TTS (High Quality, Fast)
         if lang == "en":
+            audio_bytes = _generate_groq_tts(text)
+            
+        # 1. Fallback: Specialized High-Quality TTS (Kokoro-82M via Replicate)
+        # Verify if Kokoro supports the requested lang? Currently mostly English.
+        if not audio_bytes and lang == "en":
             audio_bytes = _generate_kokoro_tts(text)
 
-        # 1. Use centralized HF client (MMS -> SpeechT5) if Kokoro fails
+        # 2. Use centralized HF client (MMS -> SpeechT5) if Kokoro fails
         if not audio_bytes:
             # Check if hf_client supports lang? It defaults to English usually.
             # Only use HF for EN for now to avoid weird accents.
             if lang == "en":
-                audio_bytes = hf_client.generate_audio(text)
+                # Strip tags for standard HF models
+                clean_text = _strip_emotion_tags(text)
+                audio_bytes = hf_client.generate_audio(clean_text)
         
-        # 2. Fallback: Google TTS (gTTS)
+        # 3. Fallback: Google TTS (gTTS)
         if not audio_bytes:
-            audio_bytes = _generate_gtts(text, lang=lang)
+            # Strip tags for Google TTS
+            clean_text = _strip_emotion_tags(text)
+            audio_bytes = _generate_gtts(clean_text, lang=lang)
     
     # 3. Final fallback: Local System TTS (Mac only) - English only usually
     if not audio_bytes and lang == "en":

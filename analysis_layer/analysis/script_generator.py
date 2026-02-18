@@ -25,11 +25,17 @@ STYLE RULES:
 - NO hashtags, NO "like and subscribe", NO emojis in the narration text
 - Write for SPOKEN delivery — short sentences, natural pauses
 - **Aim for 8-12 scenes** for a 40s video.
+- **MEDIA SELECTION**:
+  - Use `stock_video` for generic generic concepts (crowds, traffic, money, nature, cities).
+  - Use `image` for specific people, charts, or metaphorical concepts requiring AI generation.
+  - Default to `image` if unsure.
 
 EFFECTS & MEDIA:
 - `audio_effect`: Choose ONE from ["whoosh", "boom", "ding", "camera_shutter", "glitch", "none"] per scene. Use "whoosh" for transitions, "boom" for impact, "camera_shutter" for photos.
 - `visual_effect`: Choose ONE from ["zoom_fast", "zoom_slow", "pan_left", "pan_right", "shake", "flash", "none"].
 - `image_prompt`: Detailed, cinematic, vertical 9:16.
+- `media_type`: "image" or "video".
+- `stock_search_term`: 1-3 word search query for Pexels (only if media_type="video").
 
 IMAGE PROMPT RULES:
 - Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
@@ -50,10 +56,12 @@ FOLLOW-UP RULES:
 - End with forward-looking speculation or what to watch for next
 - Keep it under 45 seconds — viewers know the backstory
 - **Aim for 8-12 scenes** for a 40s video.
+- **MEDIA SELECTION**: Use `stock_video` for generic concepts (crowds count, weather), `image` for specifics.
 
 EFFECTS & MEDIA:
 - `audio_effect`: ["whoosh", "boom", "ding", "camera_shutter", "glitch", "none"].
 - `visual_effect`: ["zoom_fast", "zoom_slow", "pan_left", "pan_right", "shake", "flash", "none"].
+- `media_type`: "image" or "video".
 
 IMAGE PROMPT RULES:
 - Write detailed, cinematic prompts for FLUX/Stable Diffusion AI image generation
@@ -98,12 +106,21 @@ Respond with ONLY a JSON array of 8-12 scenes:
     "scene_type": "hook",
     "narration": "The exact words to speak (2-5 seconds worth)",
     "headline": "SHORT HEADLINE (3-5 WORDS)",
-    "image_prompt": "Detailed cinematic image prompt...",
-    "audio_effect": "whoosh|boom|ding|camera_shutter|glitch|none",
-    "visual_effect": "zoom_fast|shake|flash|none",
+    "media_type": "image",
+    "is_anchor": false,
+    "image_prompt": "Cinematic description for AI...",
+    "stock_search_term": "search query if video...",
+    "audio_effect": "whoosh",
+    "visual_effect": "zoom_fast",
     "estimated_duration": 4
   }}
-]"""
+]
+
+IMPORTANT:
+- Scene 1 (HOOK) and the FINAL Scene (KICKER) MUST have "is_anchor": true.
+- Use "media_type": "stock_video" for generic scenes (crowds, traffic).
+- Use "media_type": "image" for others.
+"""
     
     return prompt
 

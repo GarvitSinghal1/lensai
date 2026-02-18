@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 # ─── Paths ───────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "video_creation" / "output"
+OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = BASE_DIR / "video_creation" / "temp"
 DB_DIR = BASE_DIR / "collection" / "db"
 DB_PATH = Path(os.getenv("DB_PATH_OVERRIDE")) if os.getenv("DB_PATH_OVERRIDE") else DB_DIR / "news.db"
@@ -87,6 +87,9 @@ HF_MAX_RETRIES = 3                 # Retry failed API calls
 # ─── Groq API Config ────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_KEY") or os.getenv("GROQ_API_KEY")
 
+# ─── API Keys (Continued) ────────────────────────────────
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+
 # ─── LLM Model Config ────────────────────────────────────
 # Text generation (using Groq)
 # Kimi K2 (Groq provider)
@@ -96,6 +99,15 @@ LLM_FALLBACK = "llama-3.1-70b-versatile" # Good alternative on Groq
 LLM_FALLBACK_2 = "mixtral-8x7b-32768"
 
 # TTS (text-to-speech) — Using Kokoro-82M via Replicate provider
+# TTS (text-to-speech) — Utilizing Groq as primary
+TTS_PROVIDER = "groq" # or "hf"
+GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
+# Voices supported by Groq endpoint:
+GROQ_TTS_VOICE = "autumn" 
+GROQ_AVAILABLE_VOICES = ["autumn", "diana", "hannah", "austin", "daniel", "troy"]
+# Emotive tags supported by Orpheus
+GROQ_EMOTION_TAGS = ["<laugh>", "<chuckle>", "<sigh>", "<cough>", "<sniffle>", "<groan>", "<yawn>", "<gasp>"]
+
 TTS_MODEL = "hexgrad/Kokoro-82M" 
 TTS_API_URL = ""
 TTS_FALLBACK = "" 
@@ -103,8 +115,9 @@ TTS_FALLBACK_2 = ""
 
 # Image generation
 # Switched to reliable "warm" models on Hugging Face Router
+# SDXL is gated/401s often on free tier. SD v1.5 is reliable using standard Inference API.
 IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0" 
-IMAGE_FALLBACK = "runwayml/stable-diffusion-v1-5"
+IMAGE_FALLBACK = "ByteDance/SDXL-Lightning"
 IMAGE_FALLBACK_2 = "ByteDance/SDXL-Lightning"
 
 

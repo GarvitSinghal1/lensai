@@ -37,3 +37,4 @@ repo/
 lib/
 history/
 *.db
+run_test.sh
